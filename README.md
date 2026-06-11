@@ -12,6 +12,9 @@ A native macOS terminal IDE built for running many Claude Code sessions at once 
 - **Shell + browser panes** — zsh panes and WKWebView browser panes mix into any layout; browsers dock left or right
 - **CVR launcher** — kick off a CVR recording session with the Chromium window auto-tiled beside the IDE
 - **iPad remote access** — attach to any workspace from Blink Shell: `mosh your-mac -- tmux attach -t docai`
+- **Attention management** — menu-bar count of sessions waiting on you (visible even when the app is hidden), ⌘J jumps to whoever has waited longest, statuses show their age ("needs you · 14m")
+- **"While you were away"** — switching back to a workspace (or reopening the app) shows what changed since you left: which sessions finished, which are blocked on you, and which backlog item you were on
+- **Breakfix / Feature templates** — one-click Claude panes pre-loaded with guarded workflows (branch discipline, smallest-possible-change rules, test-before-stop); prompts editable in Settings → Templates
 
 ## Tech Stack
 
@@ -58,6 +61,7 @@ On first launch, Buildwright:
 | ⌘D / ⇧⌘D | New shell pane (split right / down) |
 | ⇧⌘B | New browser pane |
 | ⌘W | Close focused pane |
+| ⌘J | Jump to the pane that's been waiting on you longest |
 | ⌘T / ⇧⌘W | New tab / close tab |
 | ⌘1 | Toggle backlog sidebar |
 | ⌥⌘N | New workspace |

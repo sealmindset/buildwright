@@ -100,7 +100,8 @@ struct PaneContainerView: View {
     let workspace: Workspace
 
     private var isFocused: Bool { tab.focusedPaneID == pane.id }
-    private var claudeStatus: ClaudeStatus { app.claudeStatuses[pane.shortID] ?? .none }
+    private var paneStatus: PaneStatus? { app.paneStatuses[pane.shortID] }
+    private var claudeStatus: ClaudeStatus { paneStatus?.state ?? .none }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -178,12 +179,18 @@ struct PaneContainerView: View {
     }
 
     private var statusLabel: String {
+        let base: String
         switch claudeStatus {
-        case .working: return "working"
-        case .needsInput: return "needs you"
-        case .done: return "done"
+        case .working: base = "working"
+        case .needsInput: base = "needs you"
+        case .done: base = "done"
         case .none: return ""
         }
+        // Age matters: "needs you · 25m" is a different signal than "· 10s".
+        if let since = paneStatus?.since, claudeStatus != .working {
+            return "\(base) · \(ageString(from: since, to: app.now))"
+        }
+        return base
     }
 
     private var shortDirectory: String {

@@ -22,6 +22,23 @@ enum ClaudeStatus: String, Codable {
     }
 }
 
+/// A Claude pane's current state plus when it entered that state — the
+/// difference between "needs you · 10s" and "needs you · 25m" is the whole
+/// point of attention management.
+struct PaneStatus: Codable, Equatable {
+    var state: ClaudeStatus
+    var since: Date
+}
+
+func ageString(from since: Date, to now: Date = Date()) -> String {
+    let s = Int(now.timeIntervalSince(since))
+    if s < 0 { return "now" }
+    if s < 60 { return "\(s)s" }
+    if s < 3600 { return "\(s / 60)m" }
+    if s < 86400 { return "\(s / 3600)h" }
+    return "\(s / 86400)d"
+}
+
 /// One pane in the layout. Terminal panes (claude/shell) map 1:1 to a tmux
 /// window inside the workspace's tmux session. Browser panes are app-local.
 struct Pane: Identifiable, Codable, Equatable {

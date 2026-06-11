@@ -3,12 +3,12 @@ import Foundation
 /// Watches the status directory that bw-hook writes into and reports the
 /// current status of every Claude pane.
 final class ClaudeStatusMonitor {
-    private let onChange: ([String: ClaudeStatus]) -> Void
+    private let onChange: ([String: PaneStatus]) -> Void
     private var source: DispatchSourceFileSystemObject?
     private var directoryFD: Int32 = -1
     private var timer: DispatchSourceTimer?
 
-    init(onChange: @escaping ([String: ClaudeStatus]) -> Void) {
+    init(onChange: @escaping ([String: PaneStatus]) -> Void) {
         self.onChange = onChange
     }
 
@@ -42,7 +42,7 @@ final class ClaudeStatusMonitor {
     }
 
     private func scan() {
-        var result: [String: ClaudeStatus] = [:]
+        var result: [String: PaneStatus] = [:]
         let dir = Config.claudeStatusDirectory
         guard let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else {
             onChange([:])
@@ -53,10 +53,18 @@ final class ClaudeStatusMonitor {
                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let pane = obj["pane"] as? String,
                   let state = obj["state"] as? String else { continue }
+            let since: Date
+            if let ts = obj["ts"] as? Double {
+                since = Date(timeIntervalSince1970: ts)
+            } else if let ts = obj["ts"] as? Int {
+                since = Date(timeIntervalSince1970: Double(ts))
+            } else {
+                since = Date()
+            }
             switch state {
-            case "working": result[pane] = .working
-            case "needs-input": result[pane] = .needsInput
-            case "done": result[pane] = .done
+            case "working": result[pane] = PaneStatus(state: .working, since: since)
+            case "needs-input": result[pane] = PaneStatus(state: .needsInput, since: since)
+            case "done": result[pane] = PaneStatus(state: .done, since: since)
             default: break
             }
         }

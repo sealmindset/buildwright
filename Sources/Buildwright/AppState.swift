@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import AppKit
 
 @MainActor
 final class AppState: ObservableObject {
@@ -7,9 +8,15 @@ final class AppState: ObservableObject {
     @Published var activeWorkspaceID: UUID?
     @Published var sidebarVisible: Bool = true
     @Published var cvrPath: String = Config.defaultCVRPath
-    @Published var claudeStatuses: [String: ClaudeStatus] = [:] // pane shortID -> status
+    @Published var paneStatuses: [String: PaneStatus] = [:] // pane shortID -> status+since
+    @Published var now = Date() // ticker so status ages refresh
     @Published var showNewWorkspaceSheet = false
     @Published var showCVRSheet = false
+
+    /// Convenience: just the state for a pane.
+    func claudeState(_ shortID: String) -> ClaudeStatus {
+        paneStatuses[shortID]?.state ?? .none
+    }
 
     let tmux = TmuxManager.shared
     let backlog = BacklogStore()
@@ -35,6 +42,8 @@ final class AppState: ObservableObject {
             activeWorkspaceID = saved.activeWorkspaceID ?? saved.workspaces.first?.id
             if let path = saved.cvrPath { cvrPath = path }
             sidebarVisible = saved.sidebarVisible ?? true
+            if let p = saved.breakfixPrompt, !p.isEmpty { breakfixPrompt = p }
+            if let p = saved.featurePrompt, !p.isEmpty { featurePrompt = p }
         }
         // Remove leftover display helpers from a previous run before any
         // pane attaches (they'll be recreated fresh on demand).
@@ -50,6 +59,16 @@ final class AppState: ObservableObject {
         }
         monitor.start()
         statusMonitor = monitor
+        // Refresh visible status ages twice a minute.
+        Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.now = Date() }
+        }
+        // Hooks keep writing while the app is closed, so after the first
+        // status scan lands we can say what happened since last quit.
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            if let ws = self.activeWorkspace { self.showReentry(for: ws) }
+        }
     }
 
     private func reconcileAll() {
@@ -72,20 +91,27 @@ final class AppState: ObservableObject {
             workspaces: workspaces,
             activeWorkspaceID: activeWorkspaceID,
             cvrPath: cvrPath,
-            sidebarVisible: sidebarVisible
+            sidebarVisible: sidebarVisible,
+            breakfixPrompt: breakfixPrompt,
+            featurePrompt: featurePrompt
         ))
     }
 
-    private func applyStatuses(_ statuses: [String: ClaudeStatus]) {
-        let previous = claudeStatuses
-        claudeStatuses = statuses
+    private func applyStatuses(_ statuses: [String: PaneStatus]) {
+        let previous = paneStatuses
+        paneStatuses = statuses
+        now = Date()
+        if previous != statuses {
+            snapshotActiveWorkspace()
+            persist()
+        }
         // Notify when an unfocused pane flips to needsInput or done.
         guard let ws = activeWorkspace, let tab = ws.activeTab else { return }
         let focusedShortID = tab.focusedPaneID.flatMap { tab.pane($0)?.shortID }
         for (shortID, status) in statuses {
-            guard previous[shortID] != status, shortID != focusedShortID else { continue }
+            guard previous[shortID]?.state != status.state, shortID != focusedShortID else { continue }
             guard let title = paneTitle(forShortID: shortID) else { continue }
-            switch status {
+            switch status.state {
             case .needsInput:
                 ShellExec.notify(title: "Claude needs you", body: "\(title) is waiting for your input")
             case .done:
@@ -93,6 +119,150 @@ final class AppState: ObservableObject {
             default: break
             }
         }
+    }
+
+    // MARK: Context snapshots & re-entry
+
+    struct ReentryNotice: Equatable {
+        var workspaceName: String
+        var awaySince: Date
+        var lines: [String]
+        var backlogItemID: String?
+    }
+
+    @Published var reentryNotice: ReentryNotice?
+
+    /// Pure diff: what changed for this workspace's Claude panes while away.
+    nonisolated static func reentryLines(
+        snapshot: [String: PaneStatus],
+        current: [String: PaneStatus],
+        panes: [(shortID: String, title: String)],
+        now: Date
+    ) -> [String] {
+        var lines: [String] = []
+        for (shortID, title) in panes {
+            let before = snapshot[shortID]?.state
+            guard let after = current[shortID] else {
+                if before != nil && before != .done {
+                    lines.append("“\(title)” ended while you were away")
+                }
+                continue
+            }
+            guard before != after.state else { continue }
+            switch after.state {
+            case .done:
+                lines.append("“\(title)” finished (\(ageString(from: after.since, to: now)) ago)")
+            case .needsInput:
+                lines.append("“\(title)” is waiting on you (\(ageString(from: after.since, to: now)))")
+            case .working:
+                lines.append("“\(title)” is still working")
+            case .none:
+                break
+            }
+        }
+        return lines
+    }
+
+    /// Record what the active workspace looked like right now (called when
+    /// statuses change and when switching away).
+    private func snapshotActiveWorkspace() {
+        guard let wi = activeWorkspaceIndex else { return }
+        var snap: [String: PaneStatus] = [:]
+        for (shortID, _) in workspaces[wi].claudePanes {
+            if let s = paneStatuses[shortID] { snap[shortID] = s }
+        }
+        if workspaces[wi].lastSnapshot != snap {
+            workspaces[wi].lastSnapshot = snap
+        }
+        workspaces[wi].lastSeenAt = Date()
+    }
+
+    /// Build the "while you were away" strip for a workspace being entered.
+    private func showReentry(for ws: Workspace) {
+        guard let awaySince = ws.lastSeenAt,
+              Date().timeIntervalSince(awaySince) > 120 else {
+            reentryNotice = nil
+            return
+        }
+        let lines = Self.reentryLines(
+            snapshot: ws.lastSnapshot ?? [:],
+            current: paneStatuses,
+            panes: ws.claudePanes,
+            now: now
+        )
+        if lines.isEmpty && ws.activeBacklogItemID == nil {
+            reentryNotice = nil
+            return
+        }
+        reentryNotice = ReentryNotice(
+            workspaceName: ws.name,
+            awaySince: awaySince,
+            lines: lines,
+            backlogItemID: ws.activeBacklogItemID
+        )
+    }
+
+    func dismissReentry() { reentryNotice = nil }
+
+    // MARK: Attention queue
+
+    struct AttentionEntry: Identifiable {
+        var id: UUID { pane.id }
+        let workspaceID: UUID
+        let workspaceName: String
+        let tabID: UUID
+        let pane: Pane
+        let status: PaneStatus
+    }
+
+    /// Panes waiting on you, most urgent first: needs-input (oldest first),
+    /// then done (oldest first). Working panes are excluded — they don't
+    /// need attention yet.
+    var attentionQueue: [AttentionEntry] {
+        var entries: [AttentionEntry] = []
+        for ws in workspaces {
+            for tab in ws.tabs {
+                for pane in tab.panes where pane.kind == .claude {
+                    guard let status = paneStatuses[pane.shortID],
+                          status.state == .needsInput || status.state == .done else { continue }
+                    entries.append(AttentionEntry(
+                        workspaceID: ws.id, workspaceName: ws.name,
+                        tabID: tab.id, pane: pane, status: status))
+                }
+            }
+        }
+        return entries.sorted { a, b in
+            if a.status.state != b.status.state {
+                return a.status.state == .needsInput // needsInput outranks done
+            }
+            return a.status.since < b.status.since // oldest wait first
+        }
+    }
+
+    var needsInputCount: Int { attentionQueue.filter { $0.status.state == .needsInput }.count }
+    var doneCount: Int { attentionQueue.filter { $0.status.state == .done }.count }
+    var workingCount: Int {
+        paneStatuses.values.filter { $0.state == .working }.count
+    }
+
+    /// ⌘J — jump to the pane that has been waiting on you the longest.
+    func jumpToNextAttention() {
+        guard let entry = attentionQueue.first else { return }
+        jump(to: entry)
+    }
+
+    func jump(to entry: AttentionEntry) {
+        if activeWorkspaceID != entry.workspaceID {
+            switchWorkspace(entry.workspaceID)
+        }
+        if let wi = activeWorkspaceIndex {
+            workspaces[wi].activeTabID = entry.tabID
+            if let ti = workspaces[wi].tabs.firstIndex(where: { $0.id == entry.tabID }) {
+                workspaces[wi].tabs[ti].focusedPaneID = entry.pane.id
+            }
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        persist()
     }
 
     private func paneTitle(forShortID shortID: String) -> String? {
@@ -137,9 +307,11 @@ final class AppState: ObservableObject {
     }
 
     func switchWorkspace(_ id: UUID) {
+        snapshotActiveWorkspace() // record the world we're leaving
         activeWorkspaceID = id
         if let ws = activeWorkspace {
             tmux.ensureWorkspaceSession(ws)
+            showReentry(for: ws)
         }
         persist()
     }
@@ -256,7 +428,7 @@ final class AppState: ObservableObject {
             guard let pane = workspaces[wi].tabs[ti].panes.first(where: { $0.id == paneID }) else { continue }
             if pane.kind != .browser {
                 tmux.destroyWindow(for: pane, in: ws)
-                claudeStatuses.removeValue(forKey: pane.shortID)
+                paneStatuses.removeValue(forKey: pane.shortID)
             }
             workspaces[wi].tabs[ti].layout = workspaces[wi].tabs[ti].layout?.removing(paneID)
             workspaces[wi].tabs[ti].panes.removeAll { $0.id == paneID }
@@ -298,6 +470,43 @@ final class AppState: ObservableObject {
     func startBacklogItem(_ item: BacklogItem) {
         let prompt = "/backlog start \(item.itemID)"
         addPane(kind: .claude, title: item.itemID, prompt: prompt)
+        if let wi = activeWorkspaceIndex {
+            workspaces[wi].activeBacklogItemID = item.itemID
+            persist()
+        }
+    }
+
+    // MARK: Ship templates (Breakfix / Feature)
+
+    static let defaultBreakfixPrompt = """
+    BREAKFIX MODE — minimal, shippable fix only. \
+    1) Create a branch fix/<short-slug> from the default branch. \
+    2) Reproduce the bug and capture evidence before changing anything. \
+    3) Make the smallest fix that resolves it — no refactors, no unrelated changes. \
+    4) Run the project's tests and verify the fix plus no regressions. \
+    5) Summarize root cause and the exact change, then STOP before any deploy or merge. \
+    Ask me for the bug description now.
+    """
+
+    static let defaultFeaturePrompt = """
+    FEATURE MODE — add capability without destabilizing production. \
+    1) Create a branch feat/<short-slug>. \
+    2) Restate the request and list existing behavior that could be affected. \
+    3) Implement with tests. \
+    4) Run the full test suite and verify zero regressions. \
+    5) Update CHANGELOG.md, then STOP and recommend saving the work (no deploys). \
+    Ask me for the feature description now.
+    """
+
+    @Published var breakfixPrompt: String = AppState.defaultBreakfixPrompt
+    @Published var featurePrompt: String = AppState.defaultFeaturePrompt
+
+    func addBreakfixPane() {
+        addPane(kind: .claude, title: "breakfix", prompt: breakfixPrompt)
+    }
+
+    func addFeaturePane() {
+        addPane(kind: .claude, title: "feature", prompt: featurePrompt)
     }
 
     // MARK: Backlog filters (per workspace)

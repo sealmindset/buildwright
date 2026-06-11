@@ -25,6 +25,9 @@ struct MainWindowView: View {
         VStack(spacing: 0) {
             topBar
             Divider()
+            if let notice = app.reentryNotice {
+                ReentryStrip(notice: notice)
+            }
             if let ws = app.activeWorkspace, let tab = ws.activeTab, let layout = tab.layout {
                 LayoutView(node: layout, tab: tab, workspace: ws, path: [])
                     .padding(3)
@@ -57,6 +60,9 @@ struct MainWindowView: View {
             Menu {
                 Button("Claude pane — split right  ⌘N") { app.addPane(kind: .claude, axis: .horizontal) }
                 Button("Claude pane — split down") { app.addPane(kind: .claude, axis: .vertical) }
+                Divider()
+                Button("🔧 Breakfix pane (guarded fix workflow)") { app.addBreakfixPane() }
+                Button("✨ Feature pane (guarded feature workflow)") { app.addFeaturePane() }
                 Divider()
                 Button("Shell pane — split right  ⌘D") { app.addPane(kind: .shell, axis: .horizontal) }
                 Button("Shell pane — split down  ⇧⌘D") { app.addPane(kind: .shell, axis: .vertical) }
@@ -91,6 +97,48 @@ struct MainWindowView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(NSColor.windowBackgroundColor))
+    }
+}
+
+/// "While you were away" — the 15 minutes of mental reconstruction after a
+/// corp↔startup switch, compressed into one line you can read in 3 seconds.
+struct ReentryStrip: View {
+    @EnvironmentObject var app: AppState
+    let notice: AppState.ReentryNotice
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "clock.arrow.circlepath")
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("While you were away from \(notice.workspaceName) (\(ageString(from: notice.awaySince, to: app.now))):")
+                    .font(.system(size: 11, weight: .semibold))
+                if let item = notice.backlogItemID {
+                    Text("You were working on \(item)")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(notice.lines, id: \.self) { line in
+                    Text("• \(line)")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            if app.needsInputCount > 0 {
+                Button("Jump to next ⌘J") { app.jumpToNextAttention(); app.dismissReentry() }
+                    .font(.system(size: 11))
+            }
+            Button {
+                app.dismissReentry()
+            } label: {
+                Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
+            }
+            .buttonStyle(.borderless)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(Color.orange.opacity(0.10))
+        .overlay(Rectangle().frame(height: 1).foregroundStyle(.quaternary), alignment: .bottom)
     }
 }
 

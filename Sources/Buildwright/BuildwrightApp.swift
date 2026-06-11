@@ -57,6 +57,10 @@ struct BuildwrightApp: App {
                 }
                 .keyboardShortcut("w", modifiers: .command)
             }
+            CommandMenu("Attention") {
+                Button("Jump to Next Needing You") { app.jumpToNextAttention() }
+                    .keyboardShortcut("j", modifiers: .command)
+            }
             CommandMenu("Workspace") {
                 Button("New Tab") { app.addTab() }
                     .keyboardShortcut("t", modifiers: .command)
@@ -79,6 +83,13 @@ struct BuildwrightApp: App {
         }
         Settings {
             SettingsView()
+                .environmentObject(app)
+        }
+        MenuBarExtra {
+            AttentionMenuBarContent()
+                .environmentObject(app)
+        } label: {
+            AttentionMenuBarLabel()
                 .environmentObject(app)
         }
     }

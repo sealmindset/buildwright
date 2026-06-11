@@ -184,10 +184,43 @@ struct SettingsView: View {
                 .tabItem { Label("General", systemImage: "gear") }
             RemoteAccessView()
                 .tabItem { Label("Remote Access", systemImage: "ipad.and.iphone") }
+            templatesTab
+                .tabItem { Label("Templates", systemImage: "wand.and.stars") }
             cvrTab
                 .tabItem { Label("CVR", systemImage: "record.circle") }
         }
         .frame(width: 620, height: 480)
+    }
+
+    private var templatesTab: some View {
+        Form {
+            Section("Breakfix pane prompt") {
+                TextEditor(text: Binding(
+                    get: { app.breakfixPrompt },
+                    set: { app.breakfixPrompt = $0; app.persist() }
+                ))
+                .font(.system(size: 11, design: .monospaced))
+                .frame(minHeight: 130)
+                Button("Reset to default") {
+                    app.breakfixPrompt = AppState.defaultBreakfixPrompt
+                    app.persist()
+                }
+            }
+            Section("Feature pane prompt") {
+                TextEditor(text: Binding(
+                    get: { app.featurePrompt },
+                    set: { app.featurePrompt = $0; app.persist() }
+                ))
+                .font(.system(size: 11, design: .monospaced))
+                .frame(minHeight: 130)
+                Button("Reset to default") {
+                    app.featurePrompt = AppState.defaultFeaturePrompt
+                    app.persist()
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .padding()
     }
 
     private var generalTab: some View {

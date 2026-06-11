@@ -5,6 +5,8 @@ struct AppPersistedState: Codable {
     var activeWorkspaceID: UUID?
     var cvrPath: String?
     var sidebarVisible: Bool?
+    var breakfixPrompt: String?
+    var featurePrompt: String?
 }
 
 /// JSON persistence in ~/Library/Application Support/Buildwright/state.json.

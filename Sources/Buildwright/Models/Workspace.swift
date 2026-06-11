@@ -38,6 +38,11 @@ struct Workspace: Identifiable, Codable, Equatable {
     var tabs: [Tab]
     var activeTabID: UUID?
     var backlogFilters: BacklogFilters
+    /// Context snapshot for "while you were away" re-entry. All optional so
+    /// old state files keep decoding.
+    var lastSeenAt: Date?
+    var lastSnapshot: [String: PaneStatus]?   // pane shortID -> status at leave
+    var activeBacklogItemID: String?          // last Started backlog item
 
     init(id: UUID = UUID(), name: String, baseRepo: String, tabs: [Tab] = [], activeTabID: UUID? = nil, backlogFilters: BacklogFilters = BacklogFilters()) {
         self.id = id
@@ -46,6 +51,16 @@ struct Workspace: Identifiable, Codable, Equatable {
         self.tabs = tabs
         self.activeTabID = activeTabID
         self.backlogFilters = backlogFilters
+        self.lastSeenAt = nil
+        self.lastSnapshot = nil
+        self.activeBacklogItemID = nil
+    }
+
+    /// All Claude panes (shortID + title) across this workspace's tabs.
+    var claudePanes: [(shortID: String, title: String)] {
+        tabs.flatMap { tab in
+            tab.panes.filter { $0.kind == .claude }.map { ($0.shortID, $0.title) }
+        }
     }
 
     /// tmux session name == sanitized workspace name, so iPad attach is just
