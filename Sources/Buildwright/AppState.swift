@@ -12,6 +12,7 @@ final class AppState: ObservableObject {
     @Published var now = Date() // ticker so status ages refresh
     @Published var showNewWorkspaceSheet = false
     @Published var showCVRSheet = false
+    @Published var showPalette = false
 
     /// Convenience: just the state for a pane.
     func claudeState(_ shortID: String) -> ClaudeStatus {
@@ -446,6 +447,23 @@ final class AppState: ObservableObject {
         workspaces[wi].tabs[ti].focusedPaneID = paneID
     }
 
+    /// ⌥⌘-arrows: move focus to the spatially nearest pane in a direction.
+    func movePaneFocus(_ direction: FocusDirection) {
+        guard let ws = activeWorkspace, let tab = ws.activeTab,
+              let layout = tab.layout else { return }
+        let from = tab.focusedPaneID ?? layout.paneIDs.first
+        guard let from else { return }
+        if let target = layout.neighbor(of: from, direction: direction) {
+            focusPane(target)
+        }
+    }
+
+    /// ⌘⌥1-9: switch workspace by position.
+    func switchWorkspace(at index: Int) {
+        guard workspaces.indices.contains(index) else { return }
+        switchWorkspace(workspaces[index].id)
+    }
+
     func resizeLayout(tabID: UUID, splitPath: [Int], dividerIndex: Int, delta: Double) {
         guard let wi = activeWorkspaceIndex,
               let ti = workspaces[wi].tabs.firstIndex(where: { $0.id == tabID }),
@@ -507,6 +525,26 @@ final class AppState: ObservableObject {
 
     func addFeaturePane() {
         addPane(kind: .claude, title: "feature", prompt: featurePrompt)
+    }
+
+    /// Close the loop: a Started pane (title == backlog item id) whose Claude
+    /// is done can mark its item done in one click.
+    func backlogItem(forPane pane: Pane) -> BacklogItem? {
+        guard pane.kind == .claude else { return nil }
+        for group in backlog.epics {
+            if group.epic.itemID == pane.title { return group.epic }
+            if let story = group.stories.first(where: { $0.itemID == pane.title }) { return story }
+        }
+        return nil
+    }
+
+    func markPaneItemDone(_ pane: Pane) {
+        guard let item = backlogItem(forPane: pane), !item.isDone else { return }
+        backlog.setStatus(item, to: "done")
+        if let wi = activeWorkspaceIndex, workspaces[wi].activeBacklogItemID == item.itemID {
+            workspaces[wi].activeBacklogItemID = nil
+            persist()
+        }
     }
 
     // MARK: Backlog filters (per workspace)

@@ -25,3 +25,11 @@ All notable changes to Buildwright are documented here.
 - Attention management: menu-bar count of sessions waiting on you, attention queue sorted needs-input-first then oldest-first, ⌘J jump-to-next, status ages on pane badges ("needs you · 14m")
 - "While you were away" re-entry strips: switching to a workspace (or reopening the app) summarizes which sessions finished, which are blocked, and the last Started backlog item — powered by per-workspace context snapshots that persist across restarts
 - Breakfix and Feature pane templates: one-click Claude panes with guarded workflows (branch discipline, minimal-change rules, test-before-stop); editable in Settings → Templates
+
+## [0.3.0] - 2026-06-10
+
+### Added
+- ⌘K command palette: jump to any pane (with live status badges), switch workspaces, Start backlog stories, or run any app action by typing a few letters
+- ⌥⌘-arrow spatial pane navigation: focus moves to the geometrically nearest pane in that direction (90° cone preference so "right" never jumps diagonally)
+- ⌘⌥1-9 workspace hotkeys
+- Backlog close-the-loop: when a Started pane's Claude finishes, its header shows "mark E04-S2 done" — one click updates the board

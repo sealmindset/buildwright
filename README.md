@@ -62,6 +62,9 @@ On first launch, Buildwright:
 | ⇧⌘B | New browser pane |
 | ⌘W | Close focused pane |
 | ⌘J | Jump to the pane that's been waiting on you longest |
+| ⌘K | Command palette — jump to any pane, workspace, backlog item, or action |
+| ⌥⌘←↑↓→ | Move pane focus spatially |
+| ⌘⌥1-9 | Switch workspace by position |
 | ⌘T / ⇧⌘W | New tab / close tab |
 | ⌘1 | Toggle backlog sidebar |
 | ⌥⌘N | New workspace |

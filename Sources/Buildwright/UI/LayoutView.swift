@@ -156,6 +156,17 @@ struct PaneContainerView: View {
                 .clipShape(Capsule())
             }
             Spacer()
+            if claudeStatus == .done, let item = app.backlogItem(forPane: pane), !item.isDone {
+                Button {
+                    app.markPaneItemDone(pane)
+                } label: {
+                    Label("mark \(item.itemID) done", systemImage: "checkmark.circle")
+                        .font(.system(size: 9, weight: .medium))
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.green)
+                .help("Claude finished — mark this backlog item done")
+            }
             Text(shortDirectory)
                 .font(.system(size: 9, design: .monospaced))
                 .foregroundStyle(.tertiary)

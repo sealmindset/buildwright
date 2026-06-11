@@ -1,5 +1,9 @@
 import Foundation
 
+enum FocusDirection {
+    case left, right, up, down
+}
+
 enum SplitAxis: String, Codable {
     case horizontal // children side by side (columns)
     case vertical   // children stacked (rows)
@@ -103,6 +107,69 @@ indirect enum LayoutNode: Codable, Equatable {
             if total > 0 { newFractions = newFractions.map { $0 / total } }
             return .split(axis: axis, children: newChildren, fractions: newFractions)
         }
+    }
+
+    /// Approximate frame of every pane in a unit-square coordinate space
+    /// (divider thickness ignored — close enough for spatial navigation).
+    func paneFrames(in rect: CGRect = CGRect(x: 0, y: 0, width: 1, height: 1)) -> [UUID: CGRect] {
+        switch self {
+        case .pane(let id):
+            return [id: rect]
+        case .split(let axis, let children, let fractions):
+            var result: [UUID: CGRect] = [:]
+            var offset: CGFloat = 0
+            for (idx, child) in children.enumerated() {
+                let f = CGFloat(fractions.indices.contains(idx) ? fractions[idx] : 1.0 / Double(children.count))
+                let childRect: CGRect
+                if axis == .horizontal {
+                    childRect = CGRect(x: rect.minX + offset * rect.width, y: rect.minY,
+                                       width: f * rect.width, height: rect.height)
+                } else {
+                    childRect = CGRect(x: rect.minX, y: rect.minY + offset * rect.height,
+                                       width: rect.width, height: f * rect.height)
+                }
+                result.merge(child.paneFrames(in: childRect)) { a, _ in a }
+                offset += f
+            }
+            return result
+        }
+    }
+
+    /// Spatially nearest pane in a direction from `from` — what ⌥⌘-arrows use.
+    func neighbor(of from: UUID, direction: FocusDirection) -> UUID? {
+        let frames = paneFrames()
+        guard let origin = frames[from] else { return nil }
+        let oc = CGPoint(x: origin.midX, y: origin.midY)
+
+        func measure(_ frame: CGRect) -> (primary: CGFloat, secondary: CGFloat) {
+            let c = CGPoint(x: frame.midX, y: frame.midY)
+            switch direction {
+            case .left:  return (oc.x - c.x, abs(c.y - oc.y))
+            case .right: return (c.x - oc.x, abs(c.y - oc.y))
+            case .up:    return (oc.y - c.y, abs(c.x - oc.x))
+            case .down:  return (c.y - oc.y, abs(c.x - oc.x))
+            }
+        }
+
+        func pick(requireCone: Bool) -> UUID? {
+            var best: (id: UUID, score: CGFloat)?
+            for (id, frame) in frames where id != from {
+                let (primary, secondary) = measure(frame)
+                guard primary > 0.001 else { continue } // must be in that direction
+                // Cone: mostly-in-direction beats merely-in-direction, so
+                // "right" never jumps to the pane below-right when a pane
+                // sits straight right.
+                if requireCone && secondary > primary + 0.001 { continue }
+                let score = primary + secondary
+                if best == nil || score < best!.score - 0.001
+                    || (abs(score - best!.score) <= 0.001 && id.uuidString < best!.id.uuidString) {
+                    best = (id, score)
+                }
+            }
+            return best?.id
+        }
+
+        return pick(requireCone: true) ?? pick(requireCone: false)
     }
 
     /// Adjust the divider after child `index` in the split that directly

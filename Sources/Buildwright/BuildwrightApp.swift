@@ -60,6 +60,18 @@ struct BuildwrightApp: App {
             CommandMenu("Attention") {
                 Button("Jump to Next Needing You") { app.jumpToNextAttention() }
                     .keyboardShortcut("j", modifiers: .command)
+                Button("Command Palette…") { app.showPalette = true }
+                    .keyboardShortcut("k", modifiers: .command)
+            }
+            CommandMenu("Focus") {
+                Button("Focus Pane Left") { app.movePaneFocus(.left) }
+                    .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
+                Button("Focus Pane Right") { app.movePaneFocus(.right) }
+                    .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
+                Button("Focus Pane Up") { app.movePaneFocus(.up) }
+                    .keyboardShortcut(.upArrow, modifiers: [.command, .option])
+                Button("Focus Pane Down") { app.movePaneFocus(.down) }
+                    .keyboardShortcut(.downArrow, modifiers: [.command, .option])
             }
             CommandMenu("Workspace") {
                 Button("New Tab") { app.addTab() }
@@ -73,6 +85,11 @@ struct BuildwrightApp: App {
                 Divider()
                 Button("New Workspace…") { app.showNewWorkspaceSheet = true }
                     .keyboardShortcut("n", modifiers: [.command, .option])
+                Divider()
+                ForEach(Array(app.workspaces.prefix(9).enumerated()), id: \.element.id) { (idx, ws) in
+                    Button("Go to \(ws.name)") { app.switchWorkspace(at: idx) }
+                        .keyboardShortcut(KeyEquivalent(Character("\(idx + 1)")), modifiers: [.command, .option])
+                }
                 Divider()
                 Button("Toggle Backlog Sidebar") {
                     app.sidebarVisible.toggle()

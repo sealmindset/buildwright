@@ -19,6 +19,9 @@ struct MainWindowView: View {
         .sheet(isPresented: $app.showCVRSheet) {
             CVRLaunchSheet()
         }
+        .sheet(isPresented: $app.showPalette) {
+            CommandPaletteView()
+        }
     }
 
     private var mainArea: some View {
