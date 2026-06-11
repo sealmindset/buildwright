@@ -34,6 +34,14 @@ All notable changes to Buildwright are documented here.
 - ⌘⌥1-9 workspace hotkeys
 - Backlog close-the-loop: when a Started pane's Claude finishes, its header shows "mark E04-S2 done" — one click updates the board
 
+## [0.6.0] - 2026-06-11
+
+### Added
+- Trackpad scrolling in terminal panes: two-finger scrolls (including momentum) are forwarded to tmux as mouse-wheel events, so they scroll tmux's server-side history (enters copy-mode automatically, like iTerm). Physical mouse wheels work too. Scroll speed is normalized so finger travel roughly matches content movement.
+
+### Fixed
+- Scrolling over a terminal pane previously moved SwiftTerm's local (always-empty) scrollback and did nothing visible — tmux keeps the history, so the events now go where the history lives.
+
 ## [0.5.0] - 2026-06-11
 
 ### Added
