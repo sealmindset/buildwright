@@ -34,6 +34,13 @@ All notable changes to Buildwright are documented here.
 - ⌘⌥1-9 workspace hotkeys
 - Backlog close-the-loop: when a Started pane's Claude finishes, its header shows "mark E04-S2 done" — one click updates the board
 
+## [0.7.0] - 2026-06-11
+
+### Added
+- Private browsing by default: browser panes now run as private sessions — no cookies, logins, or history are written to disk, and everything vanishes when the app quits. All private tabs share one in-session cookie jar, so logging into a site works across tabs until quit.
+- Per-pane glasses button (tab strip): switch any browser pane between private (purple glasses) and persistent (cookies/logins saved across restarts). Switching reloads that pane's tabs against the other session.
+- Settings → General → Browser: "Open browser panes in private mode" toggle controls the default for new panes (on by default).
+
 ## [0.6.0] - 2026-06-11
 
 ### Added

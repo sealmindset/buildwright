@@ -56,6 +56,7 @@ final class AppState: ObservableObject {
             if let p = saved.featurePrompt, !p.isEmpty { featurePrompt = p }
             claudeSkipPermissions = saved.claudeSkipPermissions ?? true
             sharedBookmarks = saved.sharedBookmarks ?? []
+            browserPrivateByDefault = saved.browserPrivateByDefault ?? true
         }
         tmux.claudeSkipPermissions = claudeSkipPermissions
         // Remove leftover display helpers from a previous run before any
@@ -108,7 +109,8 @@ final class AppState: ObservableObject {
             breakfixPrompt: breakfixPrompt,
             featurePrompt: featurePrompt,
             claudeSkipPermissions: claudeSkipPermissions,
-            sharedBookmarks: sharedBookmarks
+            sharedBookmarks: sharedBookmarks,
+            browserPrivateByDefault: browserPrivateByDefault
         ))
     }
 
@@ -384,6 +386,7 @@ final class AppState: ObservableObject {
         }
         var pane = Pane(kind: kind, title: title ?? defaultTitle, directory: dir,
                         url: kind == .browser ? (url ?? "https://docs.anthropic.com") : nil)
+        if kind == .browser { pane.browserPrivate = browserPrivateByDefault }
 
         if kind != .browser {
             guard let windowID = tmux.createWindow(for: pane, in: ws, prompt: prompt) else {
@@ -422,8 +425,9 @@ final class AppState: ObservableObject {
         guard let wi = activeWorkspaceIndex else { return }
         let ws = workspaces[wi]
         guard let ti = ws.tabs.firstIndex(where: { $0.id == (ws.activeTabID ?? ws.tabs.first?.id) }) else { return }
-        let pane = Pane(kind: .browser, title: "browser", directory: ws.baseRepo,
+        var pane = Pane(kind: .browser, title: "browser", directory: ws.baseRepo,
                         url: url ?? "https://docs.anthropic.com")
+        pane.browserPrivate = browserPrivateByDefault
         workspaces[wi].tabs[ti].panes.append(pane)
         if let layout = workspaces[wi].tabs[ti].layout {
             let children: [LayoutNode] = side == .left ? [.pane(pane.id), layout] : [layout, .pane(pane.id)]
@@ -641,6 +645,24 @@ final class AppState: ObservableObject {
             tmux.claudeSkipPermissions = claudeSkipPermissions
             persist()
         }
+    }
+
+    /// New browser panes start as private sessions (nothing saved to disk).
+    @Published var browserPrivateByDefault: Bool = true {
+        didSet { persist() }
+    }
+
+    /// Flip one browser pane between private and persistent. Its web views are
+    /// dropped so they recreate against the other data store (tabs reload).
+    func toggleBrowserPrivacy(paneID: UUID) {
+        let appDefault = browserPrivateByDefault
+        var toggled: Pane?
+        withPane(paneID) { pane in
+            guard pane.kind == .browser else { return }
+            pane.browserPrivate = !pane.isPrivateBrowsing(appDefault: appDefault)
+            toggled = pane
+        }
+        if let pane = toggled { WebViewCache.shared.remove(pane) }
     }
 
     func addBreakfixPane() {

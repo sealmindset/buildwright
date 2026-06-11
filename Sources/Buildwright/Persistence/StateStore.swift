@@ -9,6 +9,7 @@ struct AppPersistedState: Codable {
     var featurePrompt: String?
     var claudeSkipPermissions: Bool?
     var sharedBookmarks: [Bookmark]?
+    var browserPrivateByDefault: Bool?
 }
 
 /// JSON persistence in ~/Library/Application Support/Buildwright/state.json.

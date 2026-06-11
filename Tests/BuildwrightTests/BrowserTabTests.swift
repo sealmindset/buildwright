@@ -107,3 +107,35 @@ struct BrowserTabTests {
         #expect(decoded.activeBrowserTabID == t2.id)
     }
 }
+
+struct BrowserPrivacyTests {
+    @Test func nilFlagFallsBackToAppDefault() {
+        let p = Pane(kind: .browser, title: "browser", directory: "/tmp", url: nil)
+        #expect(p.browserPrivate == nil)
+        #expect(p.isPrivateBrowsing(appDefault: true))
+        #expect(!p.isPrivateBrowsing(appDefault: false))
+    }
+
+    @Test func explicitFlagBeatsAppDefault() {
+        var p = Pane(kind: .browser, title: "browser", directory: "/tmp", url: nil)
+        p.browserPrivate = false
+        #expect(!p.isPrivateBrowsing(appDefault: true))
+        p.browserPrivate = true
+        #expect(p.isPrivateBrowsing(appDefault: false))
+    }
+
+    @Test func privacyFlagRoundTrips() throws {
+        var p = Pane(kind: .browser, title: "browser", directory: "/tmp", url: nil)
+        p.browserPrivate = false
+        let decoded = try JSONDecoder().decode(Pane.self, from: JSONEncoder().encode(p))
+        #expect(decoded.browserPrivate == false)
+    }
+
+    @Test func legacyPaneDecodesWithNilFlag() throws {
+        let json = """
+        {"id":"\(UUID().uuidString)","kind":"browser","title":"browser","directory":"/tmp"}
+        """
+        let decoded = try JSONDecoder().decode(Pane.self, from: Data(json.utf8))
+        #expect(decoded.browserPrivate == nil)
+    }
+}

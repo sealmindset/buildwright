@@ -9,9 +9,17 @@ final class WebViewCache {
     private var views: [UUID: WKWebView] = [:]              // tab id → web view
     private var delegates: [UUID: BrowserTabDelegate] = [:] // retained here (WKWebView holds delegates weakly)
 
+    /// One in-memory data store shared by ALL private tabs for this app run:
+    /// log into a site once and every private tab sees it, but nothing touches
+    /// disk and it all evaporates on quit.
+    private let privateStore = WKWebsiteDataStore.nonPersistent()
+
     func view(for tab: BrowserTab, in pane: Pane, app: AppState) -> WKWebView {
         if let existing = views[tab.id] { return existing }
-        let wv = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = pane.isPrivateBrowsing(appDefault: app.browserPrivateByDefault)
+            ? privateStore : .default()
+        let wv = WKWebView(frame: .zero, configuration: config)
         adopt(wv, tabID: tab.id, paneID: pane.id, app: app)
         if let urlString = tab.url, let url = URL(string: urlString) {
             wv.load(URLRequest(url: url))
@@ -112,6 +120,7 @@ struct BrowserPaneView: View {
 
     private var tabs: [BrowserTab] { pane.browserTabs ?? [] }
     private var activeTab: BrowserTab? { pane.activeBrowserTab }
+    private var isPrivate: Bool { pane.isPrivateBrowsing(appDefault: app.browserPrivateByDefault) }
     private var webView: WKWebView? {
         activeTab.map { WebViewCache.shared.view(for: $0, in: pane, app: app) }
     }
@@ -123,7 +132,7 @@ struct BrowserPaneView: View {
             bookmarksBar
             if let tab = activeTab {
                 WebViewRepresentable(tab: tab, pane: pane)
-                    .id(tab.id)
+                    .id("\(tab.id.uuidString)-private-\(isPrivate)")
             } else {
                 Spacer()
             }
@@ -150,6 +159,15 @@ struct BrowserPaneView: View {
             }
             .buttonStyle(.borderless)
             .help("New tab")
+            Button { app.toggleBrowserPrivacy(paneID: pane.id) } label: {
+                Image(systemName: "eyeglasses")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(isPrivate ? AnyShapeStyle(.purple) : AnyShapeStyle(.tertiary))
+            }
+            .buttonStyle(.borderless)
+            .help(isPrivate
+                  ? "Private session — nothing is saved to disk; logins vanish on quit. Click to make this pane persistent (tabs reload)."
+                  : "Persistent session — cookies and logins are saved. Click to make this pane private (tabs reload).")
         }
         .padding(.horizontal, 6)
         .padding(.top, 4)

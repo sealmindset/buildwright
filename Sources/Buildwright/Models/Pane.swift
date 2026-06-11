@@ -69,6 +69,10 @@ struct Pane: Identifiable, Codable, Equatable {
     /// files from before tabs existed keep decoding (see normalizeBrowserTabs).
     var browserTabs: [BrowserTab]?
     var activeBrowserTabID: UUID?
+    /// Browser panes: private session (nothing saved to disk). Stamped from the
+    /// app-wide default at creation; nil (pre-feature state files) falls back
+    /// to the app default at runtime.
+    var browserPrivate: Bool?
 
     init(id: UUID = UUID(), kind: PaneKind, title: String, tmuxWindowID: String? = nil, directory: String, url: String? = nil) {
         self.id = id
@@ -94,6 +98,10 @@ extension Pane {
     var activeBrowserTab: BrowserTab? {
         let tabs = browserTabs ?? []
         return tabs.first { $0.id == activeBrowserTabID } ?? tabs.first
+    }
+
+    func isPrivateBrowsing(appDefault: Bool) -> Bool {
+        browserPrivate ?? appDefault
     }
 
     /// Pre-tab state files carry only `url` — give such a pane its one tab.

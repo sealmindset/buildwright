@@ -234,6 +234,15 @@ struct SettingsView: View {
                 Text("Applies to new Claude panes. Existing panes keep the mode they started with.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section("Browser") {
+                Toggle("Open browser panes in private mode",
+                       isOn: Binding(
+                        get: { app.browserPrivateByDefault },
+                        set: { app.browserPrivateByDefault = $0 }
+                       ))
+                Text("Private panes save no cookies, logins, or history — everything vanishes when the app quits. Applies to new panes; use the glasses button in a browser pane to switch an existing one.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section {
                 LabeledContent("State file") {
                     Text(Config.stateDirectory.path)
