@@ -13,6 +13,7 @@
 - [ ] Code signing + notarization if ever distributed beyond this machine
 
 ## Completed
+- [x] Private browsing by default + per-pane glasses toggle + Settings default; old web data wiped from disk (v0.7.0)
 - [x] Browser tabs: tab strip with +, popup links open as tabs, restore on restart (v0.4.0)
 - [x] Per-project bookmarks: ☆ star + bookmarks bar, shared set, ⌘K integration (v0.5.0)
 - [x] Trackpad scrolling in tmux panes (v0.6.0)
