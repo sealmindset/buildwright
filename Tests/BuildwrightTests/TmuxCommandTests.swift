@@ -24,10 +24,20 @@ struct TmuxCommandTests {
     }
 
     @Test @MainActor func claudePromptQuoting() {
-        let cmd = TmuxManager.shared.paneCommand(for: .claude, prompt: "/backlog start E04-S2")
-        #expect(cmd == "claude '/backlog start E04-S2'")
-        let tricky = TmuxManager.shared.paneCommand(for: .claude, prompt: "it's tricky")
-        #expect(tricky == "claude 'it'\\''s tricky'")
+        let mgr = TmuxManager.shared
+        let saved = mgr.claudeSkipPermissions
+        defer { mgr.claudeSkipPermissions = saved }
+
+        mgr.claudeSkipPermissions = true
+        #expect(mgr.paneCommand(for: .claude) == "claude --dangerously-skip-permissions")
+        let cmd = mgr.paneCommand(for: .claude, prompt: "/backlog start E04-S2")
+        #expect(cmd == "claude --dangerously-skip-permissions '/backlog start E04-S2'")
+        let tricky = mgr.paneCommand(for: .claude, prompt: "it's tricky")
+        #expect(tricky == "claude --dangerously-skip-permissions 'it'\\''s tricky'")
+
+        mgr.claudeSkipPermissions = false
+        #expect(mgr.paneCommand(for: .claude) == "claude")
+        #expect(mgr.paneCommand(for: .claude, prompt: "hi") == "claude 'hi'")
     }
 
     @Test @MainActor func shellPaneUsesDefaultShell() {

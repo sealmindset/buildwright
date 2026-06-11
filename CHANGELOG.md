@@ -33,3 +33,8 @@ All notable changes to Buildwright are documented here.
 - ⌥⌘-arrow spatial pane navigation: focus moves to the geometrically nearest pane in that direction (90° cone preference so "right" never jumps diagonally)
 - ⌘⌥1-9 workspace hotkeys
 - Backlog close-the-loop: when a Started pane's Claude finishes, its header shows "mark E04-S2 done" — one click updates the board
+
+## [0.3.1] - 2026-06-11
+
+### Changed
+- Claude panes now launch with --dangerously-skip-permissions by default (no approval prompts). Toggleable in Settings → General; applies to new panes.

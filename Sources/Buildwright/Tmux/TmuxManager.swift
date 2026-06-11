@@ -8,6 +8,11 @@ final class TmuxManager {
     static let shared = TmuxManager()
     let client = TmuxClient()
 
+    /// Launch claude with --dangerously-skip-permissions (no approval prompts).
+    /// On by default — Buildwright is a trusted single-user environment.
+    /// Toggleable in Settings → General.
+    var claudeSkipPermissions = true
+
     /// Make sure the workspace's tmux session exists. Returns true if it was
     /// freshly created (no windows to reattach).
     @discardableResult
@@ -37,12 +42,13 @@ final class TmuxManager {
         case .shell:
             return nil // tmux default-shell (the user's login shell, zsh on macOS)
         case .claude:
+            let base = claudeSkipPermissions ? "claude --dangerously-skip-permissions" : "claude"
             if let prompt {
                 // Single-quote the prompt for the shell, escaping embedded quotes.
                 let q = prompt.replacingOccurrences(of: "'", with: "'\\''")
-                return "claude '\(q)'"
+                return "\(base) '\(q)'"
             }
-            return "claude"
+            return base
         case .browser:
             return nil // browser panes have no tmux window
         }

@@ -7,6 +7,7 @@ struct AppPersistedState: Codable {
     var sidebarVisible: Bool?
     var breakfixPrompt: String?
     var featurePrompt: String?
+    var claudeSkipPermissions: Bool?
 }
 
 /// JSON persistence in ~/Library/Application Support/Buildwright/state.json.

@@ -45,7 +45,9 @@ final class AppState: ObservableObject {
             sidebarVisible = saved.sidebarVisible ?? true
             if let p = saved.breakfixPrompt, !p.isEmpty { breakfixPrompt = p }
             if let p = saved.featurePrompt, !p.isEmpty { featurePrompt = p }
+            claudeSkipPermissions = saved.claudeSkipPermissions ?? true
         }
+        tmux.claudeSkipPermissions = claudeSkipPermissions
         // Remove leftover display helpers from a previous run before any
         // pane attaches (they'll be recreated fresh on demand).
         tmux.client.cleanupStaleGroupedSessions()
@@ -94,7 +96,8 @@ final class AppState: ObservableObject {
             cvrPath: cvrPath,
             sidebarVisible: sidebarVisible,
             breakfixPrompt: breakfixPrompt,
-            featurePrompt: featurePrompt
+            featurePrompt: featurePrompt,
+            claudeSkipPermissions: claudeSkipPermissions
         ))
     }
 
@@ -518,6 +521,14 @@ final class AppState: ObservableObject {
 
     @Published var breakfixPrompt: String = AppState.defaultBreakfixPrompt
     @Published var featurePrompt: String = AppState.defaultFeaturePrompt
+
+    /// Claude panes launch with --dangerously-skip-permissions when true.
+    @Published var claudeSkipPermissions: Bool = true {
+        didSet {
+            tmux.claudeSkipPermissions = claudeSkipPermissions
+            persist()
+        }
+    }
 
     func addBreakfixPane() {
         addPane(kind: .claude, title: "breakfix", prompt: breakfixPrompt)

@@ -225,6 +225,15 @@ struct SettingsView: View {
 
     private var generalTab: some View {
         Form {
+            Section("Claude Code") {
+                Toggle("Skip permission prompts (--dangerously-skip-permissions)",
+                       isOn: Binding(
+                        get: { app.claudeSkipPermissions },
+                        set: { app.claudeSkipPermissions = $0 }
+                       ))
+                Text("Applies to new Claude panes. Existing panes keep the mode they started with.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section {
                 LabeledContent("State file") {
                     Text(Config.stateDirectory.path)
