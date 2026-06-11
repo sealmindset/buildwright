@@ -13,6 +13,9 @@
 - [ ] Code signing + notarization if ever distributed beyond this machine
 
 ## Completed
+- [x] Browser tabs: tab strip with +, popup links open as tabs, restore on restart (v0.4.0)
+- [x] Per-project bookmarks: ☆ star + bookmarks bar, shared set, ⌘K integration (v0.5.0)
+- [x] Trackpad scrolling in tmux panes (v0.6.0)
 - [x] ⌘K command palette (v0.3.0)
 - [x] ⌥⌘-arrow pane navigation + ⌘⌥1-9 workspace hotkeys (v0.3.0)
 - [x] Backlog close-the-loop: "mark item done" on finished Started panes (v0.3.0)
