@@ -1,0 +1,10 @@
+.build/
+.swiftpm/
+*.xcodeproj
+xcuserdata/
+DerivedData/
+.DS_Store
+dist/
+Buildwright.app/
+.env
+*.log

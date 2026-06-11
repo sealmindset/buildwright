@@ -1,0 +1,97 @@
+{
+  "project_name": "Buildwright",
+  "purpose": "Native macOS terminal IDE for running many Claude Code sessions at once: tiling panes backed by a real tmux server, a backlog-driven left sidebar, browser panes, CVR launcher, and iPad remote access via Blink/mosh.",
+  "project_type": "desktop-app",
+  "active_tiers": [0],
+  "scaffold": null,
+  "features": [
+    "Tiling panes in rows, columns, or any nested combination; add/delete/resize freely",
+    "Real tmux under the hood: one tmux session per workspace, one window per pane; sessions survive app crashes and restarts",
+    "Claude Code awareness: per-pane status (working / needs input / done) via Claude Code hooks, notifications for unfocused panes",
+    "Project-level isolation: each Claude pane runs in its own folder with its own session/context/MCP",
+    "Native shell panes (zsh) alongside Claude panes",
+    "Browser panes (WKWebView) dockable anywhere; CVR recording launcher with optional window docking",
+    "Backlog left sidebar: full board from ~/.claude/backlog with per-workspace filters, search, detail view, status changes, create/edit, and Start->Claude pane",
+    "Workspaces -> tabs -> panes, with per-workspace base repo and persisted layouts",
+    "Mac-native keybindings plus tmux Ctrl+B prefix inside panes",
+    "iPad remote access: attach to any workspace from Blink Shell via mosh/ssh; bw companion CLI; Claude status in tmux status bar; mobile-tuned tmux defaults; Tailscale-aware connect strings"
+  ],
+  "users": {
+    "description": "Single power user (the developer) on macOS; no multi-user, no auth",
+    "types": ["owner"],
+    "estimated_count": "1",
+    "internal_or_external": "personal tool"
+  },
+  "auth": { "needed": false, "provider": "", "token_expiry": "" },
+  "roles": [],
+  "permissions": {},
+  "stack": {
+    "frontend": "SwiftUI + AppKit (macOS 14+)",
+    "backend": "none (local app)",
+    "database": "none (JSON state file + markdown backlog files)",
+    "orm": "",
+    "validation": "Swift Codable + manual frontmatter parsing",
+    "auth_tokens": "",
+    "language": "Swift 6 toolchain (v5 language mode)",
+    "build_tool": "Swift Package Manager",
+    "runtime": "native macOS arm64",
+    "dependencies": ["SwiftTerm (terminal emulation)"]
+  },
+  "app_type": "native macOS desktop application",
+  "multi_tenancy": { "needed": false, "tenant_type": "" },
+  "ai_features": {
+    "needed": false,
+    "description": "Buildwright hosts Claude Code as terminal processes; it does not call any LLM APIs itself.",
+    "usage_level": "none",
+    "interaction_level": "none",
+    "prompt_count_estimate": 0,
+    "prompts": [],
+    "agents": [],
+    "models": [],
+    "who_edits_prompts": "n/a",
+    "prompt_management_tier": 0
+  },
+  "ai_providers": { "needed": false },
+  "brain_features": { "enabled": false },
+  "nemo_guardrails": { "enabled": false },
+  "compliance": [],
+  "special_features": [
+    "tmux topology: session name == workspace slug on the DEFAULT tmux socket so iPad attach is plain `tmux attach -t <workspace>`; hidden grouped sessions (prefix _bw-) let the app display each window in its own UI pane",
+    "Shared-view sizing: window-size=latest + aggressive-resize (latest input wins)",
+    "Claude hooks: UserPromptSubmit->working, Notification->needs-input, Stop->done, written to ~/.local/state/buildwright/status/<pane-id>.json by Scripts/bw-hook",
+    "Notifications via osascript (works without app-bundle entitlements)",
+    "CVR integration: launches existing tool at /Users/rvance/Documents/GitHub/docai/tools/cvr via npx tsx record.ts"
+  ],
+  "mock_services": { "mock_oidc": { "needed": false } },
+  "integrations": [
+    { "name": "tmux", "direction": "both", "notes": "spawn/attach/control via tmux CLI on default socket, tmux >= 3.2 required" },
+    { "name": "Claude Code CLI", "direction": "both", "notes": "spawned in panes; hooks report status back" },
+    { "name": "backlog skill files", "direction": "both", "notes": "~/.claude/backlog markdown read/write, BOARD.md regeneration, format-compatible with /backlog skill" },
+    { "name": "CVR", "direction": "write", "notes": "launch recordings; CVR remains source of truth for bundles" }
+  ],
+  "cloud": { "provider": "none", "region": "", "cli_authenticated": false },
+  "deployment": {
+    "target": "local macOS app bundle (Scripts/bundle.sh), no cloud",
+    "containerize": false,
+    "prototype_only": false
+  },
+  "security_scanner": { "type": "none" },
+  "pages": [
+    "Main window (sidebar + tabs + pane layout)",
+    "Backlog sidebar (board, filters, detail, edit)",
+    "Settings: General, Remote Access, CVR",
+    "CVR launch sheet",
+    "New workspace sheet"
+  ],
+  "prompts_to_run": [],
+  "skipped_guardrails": {
+    "tier1_web_guardrails": "Not a web app: no frontend/backend split, no HTTP API, no browser UI of its own",
+    "oidc_auth_rbac": "Single-user local desktop tool; macOS user account is the security boundary. No auth, roles, or permissions",
+    "database_migrations_seed": "No database; state is a JSON file plus the user's existing backlog markdown",
+    "docker_compose_mock_services": "Native Mac app; Docker would defeat the purpose (needs PTYs, tmux, GUI). No external services to mock",
+    "terraform_iac": "Nothing deployed to any cloud",
+    "datatable_theme_components": "Web component standards do not apply to SwiftUI",
+    "activity_logs_notifications_modules": "Web-app observability stack replaced by a local debug log (os.Logger); user-facing notifications are macOS notifications",
+    "ai_guardrails_nemo": "App makes no LLM calls itself; Claude Code's own safety applies inside panes"
+  }
+}

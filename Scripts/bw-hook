@@ -1,0 +1,31 @@
+#!/bin/sh
+# bw-hook — Claude Code hook helper for Buildwright.
+# Reference copy; the app installs the authoritative version to ~/.local/bin/bw-hook.
+# Called by Claude Code hooks (UserPromptSubmit / PreToolUse / Notification / Stop).
+# Writes the pane's status where the Buildwright app and the tmux status bar
+# can read it. No-ops instantly when not running inside a Buildwright pane.
+#
+# Usage: bw-hook <working|needs-input|done>
+
+[ -n "$BUILDWRIGHT_PANE_ID" ] || exit 0
+
+STATE="$1"
+DIR="${BUILDWRIGHT_STATUS_DIR:-$HOME/.local/state/buildwright/status}"
+mkdir -p "$DIR" 2>/dev/null || exit 0
+
+TITLE="${BUILDWRIGHT_PANE_TITLE:-claude}"
+
+case "$STATE" in
+  working)     GLYPH="●" ;;
+  needs-input) GLYPH="◉" ;;
+  done)        GLYPH="✓" ;;
+  *)           exit 0 ;;
+esac
+
+printf '{"pane":"%s","state":"%s","title":"%s","ts":%s}\n' \
+  "$BUILDWRIGHT_PANE_ID" "$STATE" "$TITLE" "$(date +%s)" \
+  > "$DIR/$BUILDWRIGHT_PANE_ID.json"
+
+printf '%s %s' "$GLYPH" "$TITLE" > "$DIR/$BUILDWRIGHT_PANE_ID.status"
+
+exit 0
