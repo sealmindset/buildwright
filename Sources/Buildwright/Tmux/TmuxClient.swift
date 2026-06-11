@@ -43,6 +43,27 @@ struct TmuxClient {
         return result.stdout.split(separator: "\n").map(String.init)
     }
 
+    /// [(name, attachedClientCount)] for every session on the server.
+    func listSessionsWithAttachCounts() -> [(name: String, attached: Int)] {
+        let result = run(["list-sessions", "-F", "#{session_name}\t#{session_attached}"])
+        guard result.ok else { return [] }
+        return result.stdout.split(separator: "\n").compactMap { line in
+            let parts = line.split(separator: "\t").map(String.init)
+            guard parts.count == 2 else { return nil }
+            return (name: parts[0], attached: Int(parts[1]) ?? 0)
+        }
+    }
+
+    /// Kill Buildwright helper sessions (`_bw-*`) that have no attached client.
+    /// Replaces destroy-unattached (see note in ensureGroupedSession). Safe to
+    /// call any time: never touches workspace sessions or attached helpers.
+    func cleanupStaleGroupedSessions() {
+        for (name, attached) in listSessionsWithAttachCounts()
+        where name.hasPrefix(Config.groupedSessionPrefix) && attached == 0 {
+            killSession(name: name)
+        }
+    }
+
     // MARK: Session / window lifecycle
 
     /// Create a detached session for a workspace whose first window runs `command`.
@@ -98,12 +119,18 @@ struct TmuxClient {
         let name = TmuxClient.groupedSessionName(workspaceSession: workspaceSession, paneShortID: paneShortID)
         if !hasSession(name) {
             run(["new-session", "-d", "-s", name, "-t", "=\(workspaceSession)"])
-            // Helper sessions: no status bar (the app draws its own chrome),
-            // self-destruct when their client detaches.
+            if !hasSession(name) {
+                // One retry — first creation can race server startup.
+                run(["new-session", "-d", "-s", name, "-t", "=\(workspaceSession)"])
+            }
+            // Helper sessions: no status bar (the app draws its own chrome).
             // NOTE: set-option targets use the "name:" form — tmux 3.6 rejects
             // the "=name" exact-match prefix for set-option specifically.
+            // NOTE: destroy-unattached must NOT be used here — tmux reaps a
+            // detached session with that option set IMMEDIATELY, before the
+            // terminal pane ever attaches ("can't find session" on open).
+            // Stale helpers are cleaned up explicitly at app launch and quit.
             run(["set-option", "-t", "\(name):", "status", "off"])
-            run(["set-option", "-t", "\(name):", "destroy-unattached", "on"])
         }
         run(["select-window", "-t", "\(name):\(windowID)"])
         return name

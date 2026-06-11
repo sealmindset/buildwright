@@ -36,6 +36,9 @@ final class AppState: ObservableObject {
             if let path = saved.cvrPath { cvrPath = path }
             sidebarVisible = saved.sidebarVisible ?? true
         }
+        // Remove leftover display helpers from a previous run before any
+        // pane attaches (they'll be recreated fresh on demand).
+        tmux.client.cleanupStaleGroupedSessions()
         if workspaces.isEmpty {
             showNewWorkspaceSheet = true
         } else {

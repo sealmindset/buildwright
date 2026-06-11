@@ -86,6 +86,10 @@ final class TmuxManager {
     /// grouped session focused on this pane's window.
     func attachCommand(for pane: Pane, in workspace: Workspace) -> [String]? {
         guard let windowID = pane.tmuxWindowID else { return nil }
+        // Self-healing: if the workspace session is gone (server restart,
+        // manual kill), grouping against it would create a stray session
+        // with a literal "=name" group. Recreate the session first.
+        ensureWorkspaceSession(workspace)
         let grouped = client.ensureGroupedSession(
             workspaceSession: workspace.tmuxSessionName,
             paneShortID: pane.shortID,

@@ -12,6 +12,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
     }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        // Our attach clients die with the app, leaving helper sessions
+        // unattached — remove them. Workspace sessions are untouched and
+        // keep running (that's the whole point).
+        TmuxClient().cleanupStaleGroupedSessions()
+    }
 }
 
 @main
