@@ -6,6 +6,7 @@ import AppKit
 final class AppState: ObservableObject {
     @Published var workspaces: [Workspace] = []
     @Published var activeWorkspaceID: UUID?
+    @Published var sharedBookmarks: [Bookmark] = []
     @Published var sidebarVisible: Bool = true
     @Published var cvrPath: String = Config.defaultCVRPath
     @Published var paneStatuses: [String: PaneStatus] = [:] // pane shortID -> status+since
@@ -54,6 +55,7 @@ final class AppState: ObservableObject {
             if let p = saved.breakfixPrompt, !p.isEmpty { breakfixPrompt = p }
             if let p = saved.featurePrompt, !p.isEmpty { featurePrompt = p }
             claudeSkipPermissions = saved.claudeSkipPermissions ?? true
+            sharedBookmarks = saved.sharedBookmarks ?? []
         }
         tmux.claudeSkipPermissions = claudeSkipPermissions
         // Remove leftover display helpers from a previous run before any
@@ -105,7 +107,8 @@ final class AppState: ObservableObject {
             sidebarVisible: sidebarVisible,
             breakfixPrompt: breakfixPrompt,
             featurePrompt: featurePrompt,
-            claudeSkipPermissions: claudeSkipPermissions
+            claudeSkipPermissions: claudeSkipPermissions,
+            sharedBookmarks: sharedBookmarks
         ))
     }
 
@@ -517,6 +520,82 @@ final class AppState: ObservableObject {
 
     func updateBrowserTab(paneID: UUID, tabID: UUID, url: String?, title: String?) {
         withPane(paneID) { $0.updateBrowserTab(tabID, url: url, title: title) }
+    }
+
+    // MARK: Bookmarks
+
+    /// The active workspace's own bookmarks (shared ones live in sharedBookmarks).
+    var workspaceBookmarks: [Bookmark] { activeWorkspace?.bookmarks ?? [] }
+
+    func isSharedBookmark(_ id: UUID) -> Bool {
+        sharedBookmarks.contains { $0.id == id }
+    }
+
+    /// Exact-URL lookup in what the active workspace can see (own + shared).
+    func bookmark(forURL url: String) -> Bookmark? {
+        workspaceBookmarks.first { $0.url == url } ?? sharedBookmarks.first { $0.url == url }
+    }
+
+    /// Create or update a bookmark. Passing an existing id with a different
+    /// `shared` value moves it between the workspace and the shared list.
+    func saveBookmark(id: UUID? = nil, title: String, url: String, shared: Bool) {
+        if let id {
+            if shared, let i = sharedBookmarks.firstIndex(where: { $0.id == id }) {
+                sharedBookmarks[i].title = title
+                sharedBookmarks[i].url = url
+                persist()
+                return
+            }
+            if !shared, let wi = activeWorkspaceIndex,
+               let i = (workspaces[wi].bookmarks ?? []).firstIndex(where: { $0.id == id }) {
+                workspaces[wi].bookmarks?[i].title = title
+                workspaces[wi].bookmarks?[i].url = url
+                persist()
+                return
+            }
+            removeBookmarkEverywhere(id) // scope changed: pull it out, re-add below
+        }
+        let bm = Bookmark(id: id ?? UUID(), title: title, url: url)
+        if shared {
+            sharedBookmarks.append(bm)
+        } else if let wi = activeWorkspaceIndex {
+            workspaces[wi].bookmarks = (workspaces[wi].bookmarks ?? []) + [bm]
+        }
+        persist()
+    }
+
+    func deleteBookmark(_ id: UUID) {
+        removeBookmarkEverywhere(id)
+        persist()
+    }
+
+    private func removeBookmarkEverywhere(_ id: UUID) {
+        sharedBookmarks.removeAll { $0.id == id }
+        for wi in workspaces.indices {
+            workspaces[wi].bookmarks?.removeAll { $0.id == id }
+        }
+    }
+
+    /// Open a bookmark in the focused (or any) browser pane's current tab —
+    /// in a new tab when asked, or in a fresh browser pane when none exists.
+    func openBookmark(_ bm: Bookmark, inNewTab: Bool = false) {
+        guard let ws = activeWorkspace, let tab = ws.activeTab else { return }
+        var target: Pane?
+        if let f = tab.focusedPaneID, let p = tab.pane(f), p.kind == .browser { target = p }
+        else { target = tab.panes.first { $0.kind == .browser } }
+        guard let pane = target else {
+            addPane(kind: .browser, url: bm.url)
+            return
+        }
+        if inNewTab || pane.activeBrowserTab == nil {
+            addBrowserTab(paneID: pane.id, url: bm.url)
+        } else if let tabID = pane.activeBrowserTab?.id {
+            updateBrowserTab(paneID: pane.id, tabID: tabID, url: bm.url, title: nil)
+            if let wv = WebViewCache.shared.existing(tabID), let url = URL(string: bm.url) {
+                wv.load(URLRequest(url: url))
+            }
+        }
+        focusPane(pane.id)
     }
 
     // MARK: Backlog → Claude

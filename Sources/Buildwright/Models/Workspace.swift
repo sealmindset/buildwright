@@ -18,6 +18,20 @@ struct Tab: Identifiable, Codable, Equatable {
     func pane(_ id: UUID) -> Pane? { panes.first { $0.id == id } }
 }
 
+/// A saved page. Lives either on a workspace (per-project) or in the app-wide
+/// shared list that shows up in every workspace.
+struct Bookmark: Identifiable, Codable, Equatable {
+    let id: UUID
+    var title: String
+    var url: String
+
+    init(id: UUID = UUID(), title: String, url: String) {
+        self.id = id
+        self.title = title
+        self.url = url
+    }
+}
+
 /// Per-workspace backlog filter state (the whole board is always available;
 /// each workspace remembers its own view of it).
 struct BacklogFilters: Codable, Equatable {
@@ -43,6 +57,8 @@ struct Workspace: Identifiable, Codable, Equatable {
     var lastSeenAt: Date?
     var lastSnapshot: [String: PaneStatus]?   // pane shortID -> status at leave
     var activeBacklogItemID: String?          // last Started backlog item
+    /// Per-project bookmarks. Optional so old state files keep decoding.
+    var bookmarks: [Bookmark]?
 
     init(id: UUID = UUID(), name: String, baseRepo: String, tabs: [Tab] = [], activeTabID: UUID? = nil, backlogFilters: BacklogFilters = BacklogFilters()) {
         self.id = id
@@ -54,6 +70,7 @@ struct Workspace: Identifiable, Codable, Equatable {
         self.lastSeenAt = nil
         self.lastSnapshot = nil
         self.activeBacklogItemID = nil
+        self.bookmarks = nil
     }
 
     /// All Claude panes (shortID + title) across this workspace's tabs.

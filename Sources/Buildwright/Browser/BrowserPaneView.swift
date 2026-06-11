@@ -35,6 +35,9 @@ final class WebViewCache {
         delegates.removeValue(forKey: tabID)
     }
 
+    /// The live web view for a tab, if one has been created.
+    func existing(_ tabID: UUID) -> WKWebView? { views[tabID] }
+
     /// Drop every tab belonging to a closing pane.
     func remove(_ pane: Pane) {
         for tab in pane.browserTabs ?? [] { removeTab(tab.id) }
@@ -104,6 +107,8 @@ struct BrowserPaneView: View {
     let pane: Pane
     @State private var addressText: String = ""
     @FocusState private var addressFocused: Bool
+    @State private var showBookmarkPopover = false
+    @State private var editingBookmarkID: UUID?
 
     private var tabs: [BrowserTab] { pane.browserTabs ?? [] }
     private var activeTab: BrowserTab? { pane.activeBrowserTab }
@@ -115,6 +120,7 @@ struct BrowserPaneView: View {
         VStack(spacing: 0) {
             tabStrip
             addressBar
+            bookmarksBar
             if let tab = activeTab {
                 WebViewRepresentable(tab: tab, pane: pane)
                     .id(tab.id)
@@ -192,8 +198,115 @@ struct BrowserPaneView: View {
                 .textFieldStyle(.roundedBorder)
                 .font(.system(size: 11))
                 .focused($addressFocused)
+            starButton
         }
         .padding(6)
+    }
+
+    // MARK: Bookmarks
+
+    private var currentBookmark: Bookmark? {
+        guard let u = activeTab?.url, !u.isEmpty else { return nil }
+        return app.bookmark(forURL: u)
+    }
+
+    private var starButton: some View {
+        Button { showBookmarkPopover = true } label: {
+            Image(systemName: currentBookmark != nil ? "star.fill" : "star")
+                .foregroundStyle(currentBookmark != nil ? AnyShapeStyle(.yellow) : AnyShapeStyle(.secondary))
+        }
+        .buttonStyle(.borderless)
+        .disabled((activeTab?.url ?? "").isEmpty)
+        .help(currentBookmark != nil ? "Edit bookmark" : "Bookmark this page")
+        .popover(isPresented: $showBookmarkPopover, arrowEdge: .bottom) {
+            let existing = currentBookmark
+            BookmarkEditor(
+                name: existing?.title ?? webView?.title ?? hostLabel(activeTab?.url) ?? "",
+                urlText: existing?.url ?? activeTab?.url ?? "",
+                shared: existing.map { app.isSharedBookmark($0.id) } ?? false,
+                isExisting: existing != nil,
+                onSave: { name, url, shared in
+                    app.saveBookmark(id: existing?.id, title: name, url: url, shared: shared)
+                    showBookmarkPopover = false
+                },
+                onDelete: existing.map { bm in
+                    { app.deleteBookmark(bm.id); showBookmarkPopover = false }
+                }
+            )
+        }
+    }
+
+    private var bookmarksBar: some View {
+        let own = app.workspaceBookmarks
+        let shared = app.sharedBookmarks
+        return Group {
+            if !own.isEmpty || !shared.isEmpty {
+                HStack(spacing: 8) {
+                    Image(systemName: "bookmark.fill")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.tertiary)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 12) {
+                            ForEach(own) { bookmarkChip($0, shared: false) }
+                            if !own.isEmpty && !shared.isEmpty {
+                                Divider().frame(height: 12)
+                            }
+                            ForEach(shared) { bookmarkChip($0, shared: true) }
+                        }
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.bottom, 5)
+            }
+        }
+    }
+
+    private func bookmarkChip(_ bm: Bookmark, shared: Bool) -> some View {
+        Button {
+            app.openBookmark(bm, inNewTab: NSEvent.modifierFlags.contains(.command))
+        } label: {
+            Text(bm.title)
+                .font(.system(size: 10))
+                .lineLimit(1)
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.borderless)
+        .help(shared ? "\(bm.url) (shared)" : bm.url)
+        .contextMenu {
+            Button("Open in New Tab") { app.openBookmark(bm, inNewTab: true) }
+            Button("Rename…") { editingBookmarkID = bm.id }
+            if shared {
+                Button("Move to This Workspace") {
+                    app.saveBookmark(id: bm.id, title: bm.title, url: bm.url, shared: false)
+                }
+            } else {
+                Button("Move to Shared") {
+                    app.saveBookmark(id: bm.id, title: bm.title, url: bm.url, shared: true)
+                }
+            }
+            Divider()
+            Button("Delete", role: .destructive) { app.deleteBookmark(bm.id) }
+        }
+        .popover(isPresented: Binding(
+            get: { editingBookmarkID == bm.id },
+            set: { if !$0 { editingBookmarkID = nil } }
+        ), arrowEdge: .bottom) {
+            BookmarkEditor(
+                name: bm.title,
+                urlText: bm.url,
+                shared: shared,
+                isExisting: true,
+                onSave: { name, url, sh in
+                    app.saveBookmark(id: bm.id, title: name, url: url, shared: sh)
+                    editingBookmarkID = nil
+                },
+                onDelete: { app.deleteBookmark(bm.id); editingBookmarkID = nil }
+            )
+        }
+    }
+
+    private func hostLabel(_ urlString: String?) -> String? {
+        urlString.flatMap { URL(string: $0)?.host }
     }
 
     private func syncToActiveTab() {
@@ -214,5 +327,44 @@ struct BrowserPaneView: View {
         webView?.load(URLRequest(url: url))
         addressText = raw
         app.updateBrowserTab(paneID: pane.id, tabID: tab.id, url: raw, title: nil)
+    }
+}
+
+/// Small popover used by the ☆ button and the bookmark bar's Rename action.
+struct BookmarkEditor: View {
+    @State var name: String
+    @State var urlText: String
+    @State var shared: Bool
+    let isExisting: Bool
+    let onSave: (String, String, Bool) -> Void
+    let onDelete: (() -> Void)?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(isExisting ? "Edit Bookmark" : "Add Bookmark")
+                .font(.system(size: 12, weight: .semibold))
+            TextField("Name", text: $name)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 11))
+            TextField("URL", text: $urlText)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 11))
+            Toggle("Shared across all workspaces", isOn: $shared)
+                .font(.system(size: 11))
+            HStack {
+                if let onDelete {
+                    Button("Remove", role: .destructive, action: onDelete)
+                        .font(.system(size: 11))
+                }
+                Spacer()
+                Button("Save") { onSave(name, urlText, shared) }
+                    .keyboardShortcut(.defaultAction)
+                    .font(.system(size: 11))
+                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty
+                              || urlText.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(12)
+        .frame(width: 280)
     }
 }

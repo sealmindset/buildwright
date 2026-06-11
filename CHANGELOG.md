@@ -34,6 +34,13 @@ All notable changes to Buildwright are documented here.
 - ⌘⌥1-9 workspace hotkeys
 - Backlog close-the-loop: when a Started pane's Claude finishes, its header shows "mark E04-S2 done" — one click updates the board
 
+## [0.5.0] - 2026-06-11
+
+### Added
+- Bookmarks, per project: a ☆ star in the browser address bar saves the current page (name + URL editable in a popover), and a slim bookmarks bar under the address bar shows them. Each workspace keeps its own set, plus a "shared across all workspaces" group for the things you use everywhere.
+- Bookmark management: right-click a bookmark to open in a new tab, rename, move between workspace/shared, or delete. ⌘-click opens in a new tab.
+- ⌘K command palette lists all bookmarks (workspace + shared) — type a few letters to jump to one; opens a browser pane automatically if none exists.
+
 ## [0.4.0] - 2026-06-11
 
 ### Added

@@ -164,6 +164,26 @@ struct CommandPaletteView: View {
             ))
         }
 
+        // Bookmarks — the active workspace's own plus the shared set.
+        if let ws = app.activeWorkspace {
+            for bm in ws.bookmarks ?? [] {
+                items.append(PaletteItem(
+                    id: "bm-\(bm.id)", icon: "bookmark",
+                    title: bm.title,
+                    subtitle: "bookmark · \(ws.name)",
+                    action: { app.openBookmark(bm) }
+                ))
+            }
+        }
+        for bm in app.sharedBookmarks {
+            items.append(PaletteItem(
+                id: "bm-shared-\(bm.id)", icon: "bookmark",
+                title: bm.title,
+                subtitle: "bookmark · shared",
+                action: { app.openBookmark(bm) }
+            ))
+        }
+
         // Backlog stories — Start in a Claude pane.
         for group in app.backlog.epics where !group.epic.isDone {
             for story in group.stories where !story.isDone {
