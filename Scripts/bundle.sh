@@ -51,6 +51,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
+# Strip extended attributes (FinderInfo/quarantine) — codesign rejects them.
+xattr -cr "$APP" 2>/dev/null || true
 codesign --force --deep --sign - "$APP"
 
 echo "Built $APP"
