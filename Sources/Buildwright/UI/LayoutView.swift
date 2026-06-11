@@ -173,7 +173,7 @@ struct PaneContainerView: View {
                 .lineLimit(1).truncationMode(.head)
             Button {
                 TerminalViewCache.shared.remove(pane.id)
-                WebViewCache.shared.remove(pane.id)
+                WebViewCache.shared.remove(pane)
                 app.closePane(pane.id)
             } label: {
                 Image(systemName: "xmark")

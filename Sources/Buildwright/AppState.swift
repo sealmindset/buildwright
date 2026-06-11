@@ -40,6 +40,14 @@ final class AppState: ObservableObject {
 
         if let saved = StateStore.shared.load() {
             workspaces = saved.workspaces
+            // Pre-0.4 state files predate browser tabs — seed one tab per browser pane.
+            for wi in workspaces.indices {
+                for ti in workspaces[wi].tabs.indices {
+                    for pi in workspaces[wi].tabs[ti].panes.indices {
+                        workspaces[wi].tabs[ti].panes[pi].normalizeBrowserTabs()
+                    }
+                }
+            }
             activeWorkspaceID = saved.activeWorkspaceID ?? saved.workspaces.first?.id
             if let path = saved.cvrPath { cvrPath = path }
             sidebarVisible = saved.sidebarVisible ?? true
@@ -475,14 +483,40 @@ final class AppState: ObservableObject {
         persist()
     }
 
-    func updateBrowserURL(paneID: UUID, url: String) {
-        guard let wi = activeWorkspaceIndex else { return }
-        for ti in workspaces[wi].tabs.indices {
-            if let pi = workspaces[wi].tabs[ti].panes.firstIndex(where: { $0.id == paneID }) {
-                workspaces[wi].tabs[ti].panes[pi].url = url
+    // MARK: Browser tabs
+
+    private func withPane(_ paneID: UUID, _ body: (inout Pane) -> Void) {
+        for wi in workspaces.indices {
+            for ti in workspaces[wi].tabs.indices {
+                if let pi = workspaces[wi].tabs[ti].panes.firstIndex(where: { $0.id == paneID }) {
+                    body(&workspaces[wi].tabs[ti].panes[pi])
+                }
             }
         }
         persist()
+    }
+
+    @discardableResult
+    func addBrowserTab(paneID: UUID, url: String? = nil, activate: Bool = true) -> BrowserTab {
+        let tab = BrowserTab(url: url)
+        withPane(paneID) { $0.addBrowserTab(tab, activate: activate) }
+        return tab
+    }
+
+    /// Closing the last tab closes the whole pane (standard browser behavior).
+    func closeBrowserTab(paneID: UUID, tabID: UUID) {
+        var closedLast = false
+        withPane(paneID) { closedLast = $0.closeBrowserTab(tabID) }
+        WebViewCache.shared.removeTab(tabID)
+        if closedLast { closePane(paneID) }
+    }
+
+    func selectBrowserTab(paneID: UUID, tabID: UUID) {
+        withPane(paneID) { $0.selectBrowserTab(tabID) }
+    }
+
+    func updateBrowserTab(paneID: UUID, tabID: UUID, url: String?, title: String?) {
+        withPane(paneID) { $0.updateBrowserTab(tabID, url: url, title: title) }
     }
 
     // MARK: Backlog → Claude

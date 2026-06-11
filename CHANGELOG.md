@@ -34,6 +34,13 @@ All notable changes to Buildwright are documented here.
 - ⌘⌥1-9 workspace hotkeys
 - Backlog close-the-loop: when a Started pane's Claude finishes, its header shows "mark E04-S2 done" — one click updates the board
 
+## [0.4.0] - 2026-06-11
+
+### Added
+- Browser tabs: each browser pane now has a tab strip with a + button. New tabs open blank with the cursor in the address bar; tab labels follow page titles. All tabs (and which one was active) are restored on app restart, and pre-tab saved states migrate automatically.
+- Links that request a new window (target=_blank / window.open) and ⌘-clicked links now open in a new tab — previously they silently did nothing.
+- Closing a tab selects its right-hand neighbor; closing the last tab closes the pane (standard browser behavior).
+
 ## [0.3.1] - 2026-06-11
 
 ### Changed

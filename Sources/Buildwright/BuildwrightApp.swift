@@ -51,7 +51,7 @@ struct BuildwrightApp: App {
                 Button("Close Focused Pane") {
                     if let ws = app.activeWorkspace, let tab = ws.activeTab, let focus = tab.focusedPaneID {
                         TerminalViewCache.shared.remove(focus)
-                        WebViewCache.shared.remove(focus)
+                        if let pane = tab.pane(focus) { WebViewCache.shared.remove(pane) }
                         app.closePane(focus)
                     }
                 }
