@@ -22,7 +22,10 @@ final class TmuxControlClient {
         case output(paneID: String, bytes: [UInt8])
         case windowClose(windowID: String)
         case windowRenamed(windowID: String, name: String)
-        case layoutChange(windowID: String)
+        /// tmux resized a window (any cause — our own refresh-client, another
+        /// client, server events). Carries the new size so views can detect
+        /// drift between what they render and what tmux believes.
+        case layoutChange(windowID: String, cols: Int, rows: Int)
         case exited
     }
 
@@ -228,9 +231,17 @@ final class TmuxControlClient {
                 onEvent?(.windowRenamed(windowID: String(parts[1]), name: String(parts[2])))
             }
         } else if line.hasPrefix("%layout-change ") {
+            // "%layout-change @id <layout> <visible-layout> <flags>" where
+            // layout = "checksum,WxH,X,Y,...".
             let parts = line.split(separator: " ")
-            if parts.count >= 2 {
-                onEvent?(.layoutChange(windowID: String(parts[1])))
+            if parts.count >= 3 {
+                let layoutFields = parts[2].split(separator: ",")
+                if layoutFields.count >= 2 {
+                    let dims = layoutFields[1].split(separator: "x")
+                    if dims.count == 2, let w = Int(dims[0]), let h = Int(dims[1]) {
+                        onEvent?(.layoutChange(windowID: String(parts[1]), cols: w, rows: h))
+                    }
+                }
             }
         } else if line.hasPrefix("%exit") {
             // Termination handler does the cleanup; nothing to do here.

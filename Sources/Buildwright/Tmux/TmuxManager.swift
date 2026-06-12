@@ -36,7 +36,9 @@ final class TmuxManager {
         case .exited:
             controlClients[session] = nil
             TerminalViewCache.shared.controlClientExited(session: session)
-        case .windowRenamed, .layoutChange:
+        case .layoutChange(let windowID, let cols, let rows):
+            TerminalViewCache.shared.tmuxResized(windowID: windowID, cols: cols, rows: rows)
+        case .windowRenamed:
             break
         }
     }
