@@ -14,10 +14,23 @@ final class TmuxManager {
     /// Workspace snapshot per session so reconnects can recreate sessions
     /// without reaching back into AppState.
     private var workspaceBySession: [String: Workspace] = [:]
+    /// Reconnect-loop guard: clients that die within seconds of connecting
+    /// count as failures; three in a row stops the loop (a fresh pane open
+    /// resets it). Without this, a permanently-gone server loops forever —
+    /// the exit handler would restart the retry sequence at attempt 1.
+    private var quickDeathCount: [String: Int] = [:]
+    private var lastConnectAt: [String: Date] = [:]
 
     /// Live control-mode connection for a workspace, creating session and
     /// connection as needed. Returns nil only when tmux is unavailable.
+    /// Explicit requests (a pane opening) reset the reconnect-loop guard;
+    /// internal reconnects must NOT, or the failure cap never engages.
     func controlClient(for workspace: Workspace) -> TmuxControlClient? {
+        quickDeathCount[workspace.tmuxSessionName] = 0
+        return makeOrReuseClient(for: workspace)
+    }
+
+    private func makeOrReuseClient(for workspace: Workspace) -> TmuxControlClient? {
         let session = workspace.tmuxSessionName
         workspaceBySession[session] = workspace
         if let existing = controlClients[session], existing.isAlive { return existing }
@@ -28,7 +41,17 @@ final class TmuxManager {
         }
         guard control.connect() else { return nil }
         controlClients[session] = control
+        lastConnectAt[session] = Date()
         return control
+    }
+
+    /// Disconnect and forget a workspace's control state (workspace deleted).
+    func dropSession(_ session: String) {
+        controlClients[session]?.disconnect()
+        controlClients[session] = nil
+        workspaceBySession[session] = nil
+        quickDeathCount[session] = nil
+        lastConnectAt[session] = nil
     }
 
     /// The connection died (server kill, crash, manual detach). Retry a few
@@ -42,7 +65,7 @@ final class TmuxManager {
             MainActor.assumeIsolated {
                 guard let self, let workspace = self.workspaceBySession[session] else { return }
                 guard self.controlClients[session]?.isAlive != true else { return } // already healed
-                guard let control = self.controlClient(for: workspace) else {
+                guard let control = self.makeOrReuseClient(for: workspace) else {
                     self.attemptReconnect(session: session, attempt: attempt + 1)
                     return
                 }
@@ -77,7 +100,14 @@ final class TmuxManager {
         case .exited:
             controlClients[session] = nil
             TerminalViewCache.shared.controlClientExited(session: session)
-            attemptReconnect(session: session)
+            // Died right after connecting = the server is gone, not flaky.
+            let quickDeath = lastConnectAt[session].map { Date().timeIntervalSince($0) < 10 } ?? false
+            quickDeathCount[session] = quickDeath ? (quickDeathCount[session] ?? 0) + 1 : 0
+            if (quickDeathCount[session] ?? 0) >= 3 {
+                TerminalViewCache.shared.sessionLost(session)
+            } else {
+                attemptReconnect(session: session)
+            }
         case .layoutChange(let windowID, let cols, let rows):
             TerminalViewCache.shared.tmuxResized(windowID: windowID, cols: cols, rows: rows)
         case .windowRenamed:

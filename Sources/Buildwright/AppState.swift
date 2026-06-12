@@ -321,6 +321,7 @@ final class AppState: ObservableObject {
     }
 
     func jump(workspaceID: UUID, tabID: UUID, paneID: UUID) {
+        disarmTransientModes() // same contract as every other navigation
         if activeWorkspaceID != workspaceID {
             switchWorkspace(workspaceID)
         }
@@ -568,6 +569,12 @@ final class AppState: ObservableObject {
             }
             tmux.client.killSession(name: ws.tmuxSessionName)
         }
+        // Tear down cached views + the control connection, or ghost views
+        // keep streaming a deleted workspace's output forever.
+        for tab in ws.tabs {
+            for pane in tab.panes { TerminalViewCache.shared.remove(pane.id) }
+        }
+        tmux.dropSession(ws.tmuxSessionName)
         workspaces.removeAll { $0.id == id }
         if activeWorkspaceID == id { activeWorkspaceID = workspaces.first?.id }
         persist()
@@ -598,8 +605,9 @@ final class AppState: ObservableObject {
         guard let wi = activeWorkspaceIndex,
               let ti = workspaces[wi].tabs.firstIndex(where: { $0.id == tabID }) else { return }
         let ws = workspaces[wi]
-        for pane in workspaces[wi].tabs[ti].panes where pane.isTerminal {
-            tmux.destroyWindow(for: pane, in: ws)
+        for pane in workspaces[wi].tabs[ti].panes {
+            if pane.isTerminal { tmux.destroyWindow(for: pane, in: ws) }
+            TerminalViewCache.shared.remove(pane.id) // no ghost views
         }
         workspaces[wi].tabs.remove(at: ti)
         if workspaces[wi].tabs.isEmpty {
@@ -910,14 +918,24 @@ final class AppState: ObservableObject {
                 var healed: [String] = []
                 for ws in self.workspaces {
                     guard let live = result[ws.id] else { continue }
+                    var suspects: [Pane] = []
                     for tab in ws.tabs {
                         for pane in tab.panes where pane.isTerminal && !pane.isQueued {
                             guard let wid = pane.tmuxWindowID, !live.contains(wid),
                                   TerminalViewCache.shared.runStates[pane.id] == nil,
                                   TerminalViewCache.shared.contains(pane.id) else { continue }
-                            TerminalViewCache.shared.markExited(pane.id)
-                            healed.append("\(ws.name): window for “\(pane.title)” gone without close event — marked exited")
+                            suspects.append(pane)
                         }
+                    }
+                    guard !suspects.isEmpty else { continue }
+                    // Re-verify against a FRESH listing: the background
+                    // snapshot races pane restarts (a window created after
+                    // the snapshot must not be declared dead).
+                    let fresh = Set(self.tmux.client.listWindows(session: ws.tmuxSessionName).map { $0.id })
+                    guard !fresh.isEmpty else { continue }
+                    for pane in suspects where !fresh.contains(pane.tmuxWindowID ?? "") {
+                        TerminalViewCache.shared.markExited(pane.id)
+                        healed.append("\(ws.name): window for “\(pane.title)” gone without close event — marked exited")
                     }
                 }
                 self.recordHeal(healed)
@@ -989,6 +1007,13 @@ final class AppState: ObservableObject {
                 var pane = workspaces[wi].tabs[ti].panes[pi]
                 guard pane.isTerminal else { return }
                 TerminalViewCache.shared.remove(paneID)
+                // Stale status from the previous life ("done · 3h") must not
+                // carry over to the fresh process.
+                paneStatuses.removeValue(forKey: pane.shortID)
+                try? FileManager.default.removeItem(
+                    at: Config.claudeStatusDirectory.appendingPathComponent("\(pane.shortID).status"))
+                try? FileManager.default.removeItem(
+                    at: Config.claudeStatusDirectory.appendingPathComponent("\(pane.shortID).json"))
                 guard let windowID = tmux.createWindow(for: pane, in: ws) else {
                     ShellExec.notify(title: "Buildwright", body: "Could not restart pane — is tmux running?")
                     return

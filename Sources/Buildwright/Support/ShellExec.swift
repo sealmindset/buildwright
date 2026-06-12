@@ -41,8 +41,16 @@ enum ShellExec {
         } catch {
             return ShellResult(status: -1, stdout: "", stderr: "failed to launch: \(error.localizedDescription)")
         }
+        // Drain BOTH pipes concurrently: reading them sequentially deadlocks
+        // when a process fills the unread pipe's buffer (~64KB) and blocks.
+        var errData = Data()
+        let errDone = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .utility).async {
+            errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+            errDone.signal()
+        }
         let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-        let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+        errDone.wait()
         done.wait()
         return ShellResult(
             status: process.terminationStatus,

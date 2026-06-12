@@ -132,9 +132,16 @@ final class TmuxControlClient {
         if pending.isEmpty { awaitingReplySince = Date() }
         pending.append(completion ?? { _ in })
         if let data = (command + "\n").data(using: .utf8) {
-            stdinPipe.fileHandleForWriting.write(data)
+            // Off-main: a full pipe (wedged tmux) must hang the write queue,
+            // never the UI. The heartbeat kills wedged clients within ~10s.
+            writeQueue.async { [stdinPipe] in
+                stdinPipe.fileHandleForWriting.write(data)
+            }
         }
     }
+
+    /// Serial so commands stay in FIFO order (replies are matched by order).
+    private let writeQueue = DispatchQueue(label: "bw.control.write")
 
     /// Type bytes into a pane (`send-keys -H` takes hex bytes — no key-name
     /// lookup, no quoting hazards). Chunked to keep command lines short.

@@ -92,15 +92,24 @@ enum GitDiff {
             return .failure("Base checkout has uncommitted changes — commit or stash them first.")
         }
         let base = defaultBranch(repo: repo)
+        // The merge must not hijack the user's checkout: remember where the
+        // base repo was and put it back afterwards, success or failure.
+        let original = currentBranch(dir: repo)
         let checkout = ShellExec.run(["git", "-C", repo, "checkout", base])
         guard checkout.ok else { return .failure("Could not checkout \(base): \(checkout.stderr)") }
+        defer {
+            if let original, original != base {
+                _ = ShellExec.run(["git", "-C", repo, "checkout", original])
+            }
+        }
         let merge = ShellExec.run(["git", "-C", repo, "merge", "--no-ff", branch,
                                    "-m", "Merge \(branch) (Buildwright review)"])
         guard merge.ok else {
             _ = ShellExec.run(["git", "-C", repo, "merge", "--abort"])
             return .failure("Merge conflicts — aborted cleanly. Resolve by hand: git merge \(branch)")
         }
-        return .success("Merged \(branch) into \(base)")
+        let restored = (original != nil && original != base) ? " (your checkout stays on \(original!))" : ""
+        return .success("Merged \(branch) into \(base)\(restored)")
     }
 
     /// Parse unified diff text into renderable lines. Capped: gigantic diffs

@@ -56,10 +56,10 @@ final class BacklogPlanner: ObservableObject {
     /// down — no wand-clicking required.
     func autoPlanIfStale() {
         if case .running = state { return }
-        guard let plan else { runPlan(); return }
+        guard let plan else { runPlan(notifyFailure: false); return }
         let age = Date().timeIntervalSince(plan.generatedAt)
         if age > 24 * 3600 || boardChanged(since: plan.generatedAt) {
-            runPlan()
+            runPlan(notifyFailure: false)
         }
     }
 
@@ -82,9 +82,14 @@ final class BacklogPlanner: ObservableObject {
         return newest > since
     }
 
+    /// Failure toasts only for runs the user asked for — an auto-plan that
+    /// can't run (claude missing, logged out) shouldn't nag at every launch.
+    private var notifyFailure = true
+
     /// Kick off a planning run (30–90s, fully in the background).
-    func runPlan() {
+    func runPlan(notifyFailure: Bool = true) {
         if case .running = state { return } // one at a time
+        self.notifyFailure = notifyFailure
         state = .running(since: Date())
         let prompt = Self.planningPrompt
         let cwd = Config.backlogDirectory.path
@@ -104,12 +109,16 @@ final class BacklogPlanner: ObservableObject {
         guard result.ok else {
             let why = result.stderr.isEmpty ? "claude exited \(result.status) — is Claude Code installed and logged in?" : result.stderr
             state = .failed(TranscriptReader.condense(why, limit: 200))
-            ShellExec.notify(title: "Backlog plan failed", body: "Open the Plan panel for details")
+            if notifyFailure {
+                ShellExec.notify(title: "Backlog plan failed", body: "Open the Plan panel for details")
+            }
             return
         }
         guard let epics = Self.parsePlanEpics(fromCLIOutput: result.stdout), !epics.isEmpty else {
             state = .failed("Could not parse a plan from Claude's reply — try re-planning")
-            ShellExec.notify(title: "Backlog plan failed", body: "Reply was not valid plan JSON")
+            if notifyFailure {
+                ShellExec.notify(title: "Backlog plan failed", body: "Reply was not valid plan JSON")
+            }
             return
         }
         let newPlan = BacklogPlan(generatedAt: Date(), epics: epics)
