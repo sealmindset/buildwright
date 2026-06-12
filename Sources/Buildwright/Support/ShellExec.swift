@@ -30,6 +30,12 @@ enum ShellExec {
         process.standardOutput = outPipe
         process.standardError = errPipe
 
+        // Wait via semaphore, NOT waitUntilExit(): waitUntilExit spins the
+        // current run loop, which re-enters AppKit's display cycle when called
+        // mid-layout (e.g. from makeNSView) and crashes (pc=0 in UpdateCycle).
+        let done = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in done.signal() }
+
         do {
             try process.run()
         } catch {
@@ -37,7 +43,7 @@ enum ShellExec {
         }
         let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
         let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        done.wait()
         return ShellResult(
             status: process.terminationStatus,
             stdout: String(data: outData, encoding: .utf8) ?? "",
