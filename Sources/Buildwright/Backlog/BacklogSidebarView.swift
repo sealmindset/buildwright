@@ -43,6 +43,7 @@ struct BacklogSidebarView: View {
     @EnvironmentObject var app: AppState
     @ObservedObject var store: BacklogStore
     @ObservedObject var planner: BacklogPlanner
+    @ObservedObject var groomer: BacklogGroomer
     @State private var expandedEpics: Set<String> = []
     @State private var detailItem: BacklogItem?
     @State private var detailEpicGroup: BacklogEpic?
@@ -192,6 +193,17 @@ struct BacklogSidebarView: View {
             }
             .buttonStyle(.borderless)
             .help("AI build sequence — what to work on first and why (⇧⌘P)")
+            Button { app.showGroomSheet = true } label: {
+                Image(systemName: "stethoscope")
+                    .overlay(alignment: .topTrailing) {
+                        if !groomer.openSuggestions.isEmpty {
+                            Circle().fill(.teal).frame(width: 5, height: 5)
+                                .offset(x: 3, y: -3)
+                        }
+                    }
+            }
+            .buttonStyle(.borderless)
+            .help("Board grooming — dupes, stale items, missing criteria, inbox triage")
             Button { showNewEpic = true } label: {
                 Image(systemName: "plus")
             }

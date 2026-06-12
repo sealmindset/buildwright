@@ -24,7 +24,9 @@ final class AppState: ObservableObject {
     let tmux = TmuxManager.shared
     let backlog = BacklogStore()
     let planner = BacklogPlanner()
+    let groomer = BacklogGroomer()
     @Published var showPlanSheet = false
+    @Published var showGroomSheet = false
     @Published var autoPlanOnLaunch = true
     private var statusMonitor: ClaudeStatusMonitor?
 
@@ -73,6 +75,7 @@ final class AppState: ObservableObject {
             if saved.chatPrompt == AppState.legacyChatPrompt { chatPrompt = AppState.defaultChatPrompt }
         }
         planner.onCost = { [weak self] usd in self?.recordAISpend(usd) }
+        groomer.onCost = { [weak self] usd in self?.recordAISpend(usd) }
         TerminalViewCache.shared.applyFontSize(CGFloat(terminalFontSize))
         // System-wide ⌥⌘B → app forward + Mission Control.
         NotificationCenter.default.addObserver(forName: .bwSummon, object: nil, queue: .main) { [weak self] _ in
@@ -93,6 +96,13 @@ final class AppState: ObservableObject {
         }
         backlog.startWatching()
         planner.loadSavedPlan()
+        groomer.loadSavedReport()
+        // Weekly hygiene pass, well after launch so it never competes with
+        // reattach or the auto-plan.
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 20_000_000_000)
+            self.groomer.autoGroomIfDue()
+        }
         startHealthLoop()
         startBoardWatcher()
         startIncidentProbe()
@@ -1765,6 +1775,48 @@ final class AppState: ObservableObject {
                 }
             }
         }
+    }
+
+    // MARK: Grooming triage (accept applies, reject hides across runs)
+
+    /// Apply one accepted grooming suggestion. Every path writes a history
+    /// line so the item records why it changed.
+    func applyGroomSuggestion(_ s: GroomSuggestion) {
+        defer { groomer.remove(s) }
+        guard let item = backlogItem(byID: s.item) else { return }
+        switch s.kind {
+        case "duplicate":
+            recordItemEvent(item.itemID, "closed as duplicate of \(s.of ?? "?") (grooming)")
+            backlog.setStatus(item, to: "done")
+        case "stale":
+            recordItemEvent(item.itemID, "stale (\(s.note)) — back to backlog (grooming)")
+            backlog.setStatus(item, to: "backlog")
+        case "acceptance":
+            guard let criteria = s.criteria, !criteria.isEmpty else { return }
+            backlog.appendSection(item, header: "Acceptance criteria", lines: criteria)
+            recordItemEvent(item.itemID, "acceptance criteria added (grooming)")
+        case "oversize":
+            guard let titles = s.split, !titles.isEmpty,
+                  let group = backlog.epics.first(where: { g in
+                      g.epic.itemID == item.parent || g.epic.itemID == item.itemID
+                  }) else { return }
+            let epicID = group.epic.itemID
+            for title in titles {
+                // Re-fetch each pass: createStory numbers from the group
+                // snapshot, and reload() inside it refreshes `epics`.
+                guard let fresh = backlog.epics.first(where: { $0.epic.itemID == epicID }) else { break }
+                backlog.createStory(in: fresh, title: title,
+                                    body: "Split out of \(item.itemID) (\(item.title)) via grooming.")
+            }
+            recordItemEvent(item.itemID, "split into: \(titles.joined(separator: " / ")) (grooming)")
+            backlog.setStatus(item, to: "done")
+        case "assign":
+            guard let target = backlog.epics.first(where: { $0.epic.itemID == s.epic }) else { return }
+            backlog.moveStory(item, to: target)
+        default:
+            break
+        }
+        recomputeDrift()
     }
 
     // MARK: Item traceability (history lives in the item's own markdown)

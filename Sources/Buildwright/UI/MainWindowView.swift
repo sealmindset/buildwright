@@ -6,7 +6,7 @@ struct MainWindowView: View {
     var body: some View {
         HSplitView {
             if app.sidebarVisible {
-                BacklogSidebarView(store: app.backlog, planner: app.planner)
+                BacklogSidebarView(store: app.backlog, planner: app.planner, groomer: app.groomer)
                     .frame(minWidth: 230, idealWidth: 280, maxWidth: 420)
             }
             mainArea
@@ -33,6 +33,9 @@ struct MainWindowView: View {
         }
         .sheet(isPresented: $app.showCapture) {
             CaptureSheet()
+        }
+        .sheet(isPresented: $app.showGroomSheet) {
+            BacklogGroomView(groomer: app.groomer)
         }
     }
 

@@ -85,6 +85,7 @@ struct BuildwrightApp: App {
                     .keyboardShortcut("k", modifiers: [.command, .shift])
                 Button("Plan Backlog (AI)…") { app.showPlanSheet = true }
                     .keyboardShortcut("p", modifiers: [.command, .shift])
+                Button("Groom Backlog (AI)…") { app.showGroomSheet = true }
                 Divider()
                 Button("Copy Diagnostics Snapshot") { app.copyDiagnostics() }
                 Button("Capture a Thought…") { app.showCapture = true }

@@ -160,6 +160,58 @@ final class BacklogStore: ObservableObject {
         write(fields: fields, body: body, to: item.fileURL)
     }
 
+    /// Append a markdown section (e.g. proposed acceptance criteria) to an
+    /// item's body, keeping History last when present.
+    func appendSection(_ item: BacklogItem, header: String, lines: [String]) {
+        guard let content = try? String(contentsOf: item.fileURL, encoding: .utf8) else { return }
+        var (fields, body) = Frontmatter.parse(content)
+        Self.setField(&fields, "updated", Self.today)
+        let section = "\n## \(header)\n" + lines.map { "- \($0)" }.joined(separator: "\n") + "\n"
+        if let range = body.range(of: "\n## History") {
+            body.insert(contentsOf: section, at: range.lowerBound)
+        } else {
+            while body.hasSuffix("\n") { body.removeLast() }
+            body += "\n" + section
+        }
+        write(fields: fields, body: body, to: item.fileURL)
+    }
+
+    /// Move a story to another epic: it gets the target's next S-number and
+    /// a fresh id; the old file goes away. Returns the new id. (How inbox
+    /// thoughts graduate into real epics.)
+    @discardableResult
+    func moveStory(_ story: BacklogItem, to group: BacklogEpic) -> String? {
+        guard !story.isEpic,
+              let content = try? String(contentsOf: story.fileURL, encoding: .utf8) else { return nil }
+        let nums = group.stories.compactMap { item -> Int? in
+            guard let range = item.itemID.range(of: "-S") else { return nil }
+            return Int(item.itemID[range.upperBound...].prefix(while: { $0.isNumber }))
+        }
+        let n = (nums.max() ?? 0) + 1
+        let newID = "\(group.epic.itemID)-S\(n)"
+        var (fields, body) = Frontmatter.parse(content)
+        Self.setField(&fields, "id", newID)
+        Self.setField(&fields, "parent", group.epic.itemID)
+        Self.setField(&fields, "updated", Self.today)
+        body = Self.appendingHistory(to: body, line: "moved from \(story.itemID) into \(group.epic.itemID)")
+        let dest = group.directory
+            .appendingPathComponent("stories")
+            .appendingPathComponent("S\(n)-\(Self.slugify(story.title)).md")
+        do {
+            try FileManager.default.createDirectory(
+                at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Frontmatter.serialize(fields: fields, body: body)
+                .write(to: dest, atomically: true, encoding: .utf8)
+            try FileManager.default.removeItem(at: story.fileURL)
+            reload()
+            regenerateBoard()
+            return newID
+        } catch {
+            lastError = "Could not move \(story.itemID): \(error.localizedDescription)"
+            return nil
+        }
+    }
+
     nonisolated static func appendingHistory(to body: String, line: String) -> String {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd HH:mm"
