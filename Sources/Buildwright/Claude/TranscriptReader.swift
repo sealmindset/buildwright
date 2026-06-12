@@ -9,31 +9,45 @@ enum TranscriptReader {
     /// assistant text is always near the end.
     private static let tailBytes = 256 * 1024
 
-    /// Last assistant text in the transcript, single-line, trimmed.
-    /// Returns nil when the file is unreadable or contains no assistant text.
     static func lastAssistantText(transcriptPath: String) -> String? {
-        guard let handle = FileHandle(forReadingAtPath: transcriptPath) else { return nil }
+        lastAssistantInfo(transcriptPath: transcriptPath).text
+    }
+
+    /// Last assistant text + the session's current context size (input +
+    /// cache tokens of the most recent usage record). One tail read.
+    static func lastAssistantInfo(transcriptPath: String) -> (text: String?, contextTokens: Int?) {
+        guard let handle = FileHandle(forReadingAtPath: transcriptPath) else { return (nil, nil) }
         defer { try? handle.close() }
-        guard let size = try? handle.seekToEnd() else { return nil }
+        guard let size = try? handle.seekToEnd() else { return (nil, nil) }
         let start = size > UInt64(tailBytes) ? size - UInt64(tailBytes) : 0
         guard (try? handle.seek(toOffset: start)) != nil,
-              let data = try? handle.readToEnd() else { return nil }
+              let data = try? handle.readToEnd() else { return (nil, nil) }
 
-        // Walk lines from the end; first complete assistant text wins.
+        // Walk lines from the end; first assistant text and first usage win.
+        var text: String?
+        var tokens: Int?
         let lines = data.split(separator: UInt8(ascii: "\n"))
         for line in lines.reversed() {
             guard let obj = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any],
                   obj["type"] as? String == "assistant",
-                  let message = obj["message"] as? [String: Any],
-                  let content = message["content"] as? [[String: Any]] else { continue }
-            let text = content
-                .filter { $0["type"] as? String == "text" }
-                .compactMap { $0["text"] as? String }
-                .joined(separator: " ")
-            let cleaned = condense(text)
-            if !cleaned.isEmpty { return cleaned }
+                  let message = obj["message"] as? [String: Any] else { continue }
+            if tokens == nil, let usage = message["usage"] as? [String: Any] {
+                let total = ["input_tokens", "cache_read_input_tokens",
+                             "cache_creation_input_tokens", "output_tokens"]
+                    .compactMap { usage[$0] as? Int }.reduce(0, +)
+                if total > 0 { tokens = total }
+            }
+            if text == nil, let content = message["content"] as? [[String: Any]] {
+                let joined = content
+                    .filter { $0["type"] as? String == "text" }
+                    .compactMap { $0["text"] as? String }
+                    .joined(separator: " ")
+                let cleaned = condense(joined)
+                if !cleaned.isEmpty { text = cleaned }
+            }
+            if text != nil && tokens != nil { break }
         }
-        return nil
+        return (text, tokens)
     }
 
     /// Collapse to a single readable line capped for status UI.

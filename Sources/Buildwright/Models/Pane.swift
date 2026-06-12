@@ -31,12 +31,23 @@ struct PaneStatus: Codable, Equatable {
     var state: ClaudeStatus
     var since: Date
     var detail: String?
+    /// Approximate context size of the Claude session (from the transcript's
+    /// last usage record) — the live activity/fullness signal per pane.
+    var contextTokens: Int?
 
-    init(state: ClaudeStatus, since: Date, detail: String? = nil) {
+    init(state: ClaudeStatus, since: Date, detail: String? = nil, contextTokens: Int? = nil) {
         self.state = state
         self.since = since
         self.detail = detail
+        self.contextTokens = contextTokens
     }
+}
+
+/// 958_000 → "958k"; 1_200_000 → "1.2M".
+func tokenString(_ tokens: Int) -> String {
+    if tokens >= 1_000_000 { return String(format: "%.1fM", Double(tokens) / 1_000_000) }
+    if tokens >= 1_000 { return "\(tokens / 1_000)k" }
+    return "\(tokens)"
 }
 
 func ageString(from since: Date, to now: Date = Date()) -> String {

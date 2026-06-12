@@ -43,7 +43,7 @@ final class ClaudeStatusMonitor {
 
     /// Transcript-tail cache: pane shortID → (transcript mtime, extracted
     /// text). Scans run every few seconds; only re-parse when the file moved.
-    private var transcriptCache: [String: (mtime: Date, text: String?)] = [:]
+    private var transcriptCache: [String: (mtime: Date, text: String?, tokens: Int?)] = [:]
 
     private func scan() {
         var result: [String: PaneStatus] = [:]
@@ -65,33 +65,30 @@ final class ClaudeStatusMonitor {
             } else {
                 since = Date()
             }
-            let detail = detail(for: pane, state: state, statusJSON: obj)
+            let info = transcriptInfo(for: pane, statusJSON: obj)
+            let detail = (state == "needs-input" || state == "done")
+                ? ((obj["detail"] as? String).flatMap { $0.isEmpty ? nil : TranscriptReader.condense($0) } ?? info.text)
+                : nil
             switch state {
-            case "working": result[pane] = PaneStatus(state: .working, since: since)
-            case "needs-input": result[pane] = PaneStatus(state: .needsInput, since: since, detail: detail)
-            case "done": result[pane] = PaneStatus(state: .done, since: since, detail: detail)
+            case "working": result[pane] = PaneStatus(state: .working, since: since, contextTokens: info.tokens)
+            case "needs-input": result[pane] = PaneStatus(state: .needsInput, since: since, detail: detail, contextTokens: info.tokens)
+            case "done": result[pane] = PaneStatus(state: .done, since: since, detail: detail, contextTokens: info.tokens)
             default: break
             }
         }
         onChange(result)
     }
 
-    /// What does this pane need / what did it finish? Prefer the hook's
-    /// Notification message ("Claude needs your permission to …"); fall back
-    /// to the last assistant message in the transcript.
-    private func detail(for pane: String, state: String, statusJSON: [String: Any]) -> String? {
-        guard state == "needs-input" || state == "done" else { return nil }
-        if let message = statusJSON["detail"] as? String, !message.isEmpty {
-            return TranscriptReader.condense(message)
-        }
-        guard let transcript = statusJSON["transcript"] as? String, !transcript.isEmpty else { return nil }
+    /// Transcript tail (mtime-cached): last assistant text + context tokens.
+    private func transcriptInfo(for pane: String, statusJSON: [String: Any]) -> (text: String?, tokens: Int?) {
+        guard let transcript = statusJSON["transcript"] as? String, !transcript.isEmpty else { return (nil, nil) }
         let mtime = (try? FileManager.default.attributesOfItem(atPath: transcript)[.modificationDate] as? Date)
             .flatMap { $0 } ?? .distantPast
         if let cached = transcriptCache[pane], cached.mtime == mtime {
-            return cached.text
+            return (cached.text, cached.tokens)
         }
-        let text = TranscriptReader.lastAssistantText(transcriptPath: transcript)
-        transcriptCache[pane] = (mtime, text)
-        return text
+        let info = TranscriptReader.lastAssistantInfo(transcriptPath: transcript)
+        transcriptCache[pane] = (mtime, info.text, info.contextTokens)
+        return (info.text, info.contextTokens)
     }
 }

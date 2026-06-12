@@ -95,10 +95,11 @@ struct MissionControlCard: View {
             return entry.pane.kind == .shell ? "shell" : "no signal"
         }
         let age = ageString(from: status.since, to: now)
+        let tok = status.contextTokens.map { " · \(tokenString($0))" } ?? ""
         switch status.state {
-        case .working: return "working · \(age)"
-        case .needsInput: return "needs you · \(age)"
-        case .done: return "done · \(age)"
+        case .working: return "working · \(age)\(tok)"
+        case .needsInput: return "needs you · \(age)\(tok)"
+        case .done: return "done · \(age)\(tok)"
         case .none: return "idle"
         }
     }

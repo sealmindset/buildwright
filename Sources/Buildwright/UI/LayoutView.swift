@@ -238,11 +238,13 @@ struct PaneContainerView: View {
         case .done: base = "done"
         case .none: return ""
         }
+        var suffix = ""
+        if let tokens = paneStatus?.contextTokens { suffix = " · \(tokenString(tokens))" }
         // Age matters: "needs you · 25m" is a different signal than "· 10s".
         if let since = paneStatus?.since, claudeStatus != .working {
-            return "\(base) · \(ageString(from: since, to: app.now))"
+            return "\(base) · \(ageString(from: since, to: app.now))\(suffix)"
         }
-        return base
+        return base + suffix
     }
 
     private var shortDirectory: String {
