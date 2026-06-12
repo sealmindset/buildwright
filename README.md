@@ -10,6 +10,7 @@ A native macOS terminal IDE built for running many Claude Code sessions at once 
 - **Built for Claude Code** — each pane shows whether Claude is working (●), needs you (◉), or done (✓); unfocused sessions ping you with a macOS notification that says *what* Claude needs (read from the session transcript)
 - **Mission Control** — ⇧⌘K (or ⌥⌘B from anywhere in macOS): every pane in every workspace as one glanceable grid — status, wait time, Claude's last message; click to jump
 - **Worktree isolation** — spawn a Claude pane in its own git worktree + branch (⌃⌘N) so parallel agents never trample each other; clean worktrees auto-remove on close, branches kept
+- **Diff review pane (⇧⌘G)** — read-only native diff viewer: uncommitted work or branch-vs-base, ± button on any terminal pane reviews that pane's folder; for clean worktree branches a guarded merge closes the loop (refuses on dirty base, aborts cleanly on conflicts)
 - **Linear-preferred safety gate** — a new Claude pane in a folder where another is working goes *on deck* automatically and starts when the first finishes (⌥⌘T to tee up the next prompt while the current one runs); escape hatches: start now, or run isolated in a worktree
 - **Chat panes** — a Claude thinking partner opened in your backlog board: discuss ideas, push back, file the keepers as backlog items; never touches code, always safe to run alongside anything
 - **Project isolation** — each Claude pane runs in its own folder with its own session, context, and MCP; zero cross-talk
@@ -75,6 +76,7 @@ On first launch, Buildwright:
 | ⌃⌘B | Broadcast input to every terminal pane in the tab (toggle, auto-disarms on tab switch) |
 | ⌃⌘N | New Claude pane in an isolated git worktree |
 | ⌥⌘T | Tee up the next prompt — queues behind the working pane, auto-starts when it finishes |
+| ⇧⌘G | New diff review pane (or click ± on any terminal pane's header) |
 | ⌥⌘←↑↓→ | Move pane focus spatially |
 | ⌘⌥1-9 | Switch workspace by position |
 | ⌘T / ⇧⌘W | New tab / close tab |

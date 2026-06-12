@@ -84,6 +84,8 @@ final class TmuxManager {
             return base
         case .browser:
             return nil // browser panes have no tmux window
+        case .diff:
+            return nil // diff panes are app-local viewers
         }
     }
 
@@ -125,7 +127,7 @@ final class TmuxManager {
             // have no window yet by design — they are not dead.
             var dead = Set<UUID>()
             for tab in workspace.tabs {
-                for pane in tab.panes where pane.kind != .browser && !pane.isQueued {
+                for pane in tab.panes where pane.isTerminal && !pane.isQueued {
                     dead.insert(pane.id)
                 }
             }
@@ -136,7 +138,7 @@ final class TmuxManager {
         let liveWindowIDs = Set(client.listWindows(session: session).map { $0.id })
         var dead = Set<UUID>()
         for tab in workspace.tabs {
-            for pane in tab.panes where pane.kind != .browser && !pane.isQueued {
+            for pane in tab.panes where pane.isTerminal && !pane.isQueued {
                 if let wid = pane.tmuxWindowID, liveWindowIDs.contains(wid) { continue }
                 dead.insert(pane.id)
             }

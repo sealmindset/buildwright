@@ -325,7 +325,7 @@ final class AppState: ObservableObject {
         workspaces.map { ws in
             var entries: [OverviewEntry] = []
             for tab in ws.tabs {
-                for pane in tab.panes where pane.kind != .browser {
+                for pane in tab.panes where pane.isTerminal {
                     entries.append(OverviewEntry(
                         workspaceID: ws.id, workspaceName: ws.name,
                         tabID: tab.id, tabName: tab.name,
@@ -376,7 +376,7 @@ final class AppState: ObservableObject {
             return
         }
         TerminalViewCache.shared.broadcastTargets =
-            Set(tab.panes.filter { $0.kind != .browser }.map(\.id))
+            Set(tab.panes.filter { $0.isTerminal }.map(\.id))
     }
 
     // MARK: Terminal appearance
@@ -438,12 +438,13 @@ final class AppState: ObservableObject {
                 case .claude: title = "claude"
                 case .shell: title = "shell"
                 case .browser: title = "browser"
+                case .diff: title = "diff"
                 }
                 var pane = Pane(kind: kind, title: title, directory: dir,
                                 url: kind == .browser ? (url ?? "https://docs.anthropic.com") : nil)
                 if kind == .browser {
                     pane.browserPrivate = browserPrivateByDefault
-                } else {
+                } else if pane.isTerminal {
                     guard let windowID = tmux.createWindow(for: pane, in: ws) else { return nil }
                     pane.tmuxWindowID = windowID
                 }
@@ -517,7 +518,7 @@ final class AppState: ObservableObject {
         guard let ws = workspaces.first(where: { $0.id == id }) else { return }
         if killSessions {
             for tab in ws.tabs {
-                for pane in tab.panes where pane.kind != .browser {
+                for pane in tab.panes where pane.isTerminal {
                     tmux.destroyWindow(for: pane, in: ws)
                 }
             }
@@ -553,7 +554,7 @@ final class AppState: ObservableObject {
         guard let wi = activeWorkspaceIndex,
               let ti = workspaces[wi].tabs.firstIndex(where: { $0.id == tabID }) else { return }
         let ws = workspaces[wi]
-        for pane in workspaces[wi].tabs[ti].panes where pane.kind != .browser {
+        for pane in workspaces[wi].tabs[ti].panes where pane.isTerminal {
             tmux.destroyWindow(for: pane, in: ws)
         }
         workspaces[wi].tabs.remove(at: ti)
@@ -602,6 +603,7 @@ final class AppState: ObservableObject {
         case .claude: defaultTitle = worktreeBranch.map { String($0.dropFirst(3)) } ?? "claude"
         case .shell: defaultTitle = "shell"
         case .browser: defaultTitle = "browser"
+        case .diff: defaultTitle = "diff"
         }
         var pane = Pane(kind: kind, title: title ?? defaultTitle, directory: dir,
                         url: kind == .browser ? (url ?? "https://docs.anthropic.com") : nil)
@@ -616,7 +618,7 @@ final class AppState: ObservableObject {
            let gate = workingClaudePane(inDirectory: dir, of: ws) {
             pane.gatePaneID = gate.id
             pane.queuedPrompt = prompt
-        } else if kind != .browser {
+        } else if pane.isTerminal {
             guard let windowID = tmux.createWindow(for: pane, in: ws, prompt: prompt) else {
                 ShellExec.notify(title: "Buildwright", body: "Could not create tmux window — is tmux installed?")
                 return
@@ -770,6 +772,14 @@ final class AppState: ObservableObject {
                 title: "chat", prompt: chatPrompt)
     }
 
+    /// Open a read-only diff pane beside a terminal pane, reviewing that
+    /// pane's folder (the worktree → review → merge loop).
+    func addDiffPane(reviewing pane: Pane) {
+        focusPane(pane.id) // split lands beside the reviewed pane
+        addPane(kind: .diff, directory: pane.directory,
+                title: "diff: \(pane.title)")
+    }
+
     enum DockSide { case left, right }
 
     /// Dock a browser pane to the far left or right of the whole tab layout
@@ -798,7 +808,7 @@ final class AppState: ObservableObject {
         let ws = workspaces[wi]
         for ti in workspaces[wi].tabs.indices {
             guard let pane = workspaces[wi].tabs[ti].panes.first(where: { $0.id == paneID }) else { continue }
-            if pane.kind != .browser {
+            if pane.isTerminal {
                 tmux.destroyWindow(for: pane, in: ws)
                 paneStatuses.removeValue(forKey: pane.shortID)
             }

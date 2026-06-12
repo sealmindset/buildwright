@@ -123,6 +123,7 @@ struct PaneContainerView: View {
         case .claude: return "sparkle"
         case .shell: return "terminal"
         case .browser: return "globe"
+        case .diff: return "plus.forwardslash.minus"
         }
     }
 
@@ -184,6 +185,16 @@ struct PaneContainerView: View {
                 .foregroundStyle(.green)
                 .help("Claude finished — mark this backlog item done")
             }
+            if pane.isTerminal {
+                Button {
+                    app.addDiffPane(reviewing: pane)
+                } label: {
+                    Image(systemName: "plus.forwardslash.minus")
+                        .font(.system(size: 9))
+                }
+                .buttonStyle(.borderless)
+                .help("Review diff — what changed in this pane's folder")
+            }
             Text(shortDirectory)
                 .font(.system(size: 9, design: .monospaced))
                 .foregroundStyle(.tertiary)
@@ -233,6 +244,8 @@ struct PaneContainerView: View {
         switch pane.kind {
         case .browser:
             BrowserPaneView(pane: pane)
+        case .diff:
+            DiffPaneView(pane: pane)
         case .claude, .shell:
             if pane.isQueued {
                 QueuedPaneView(pane: pane)

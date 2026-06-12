@@ -44,6 +44,8 @@ struct BuildwrightApp: App {
                 Button("Tee Up Next…") { app.showTeeUpSheet = true }
                     .keyboardShortcut("t", modifiers: [.command, .option])
                 Button("New Chat Pane (backlog ideas)") { app.addChatPane() }
+                Button("New Diff Review Pane") { app.addPane(kind: .diff) }
+                    .keyboardShortcut("g", modifiers: [.command, .shift])
                 Divider()
                 Button("New Shell Pane (split right)") { app.addPane(kind: .shell, axis: .horizontal) }
                     .keyboardShortcut("d", modifiers: .command)

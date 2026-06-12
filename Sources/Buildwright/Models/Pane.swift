@@ -4,6 +4,7 @@ enum PaneKind: String, Codable {
     case claude
     case shell
     case browser
+    case diff   // read-only git diff viewer; app-local like browser panes
 }
 
 enum ClaudeStatus: String, Codable {
@@ -110,6 +111,10 @@ struct Pane: Identifiable, Codable, Equatable {
 
     /// On deck: waiting for its gate pane to finish before launching.
     var isQueued: Bool { gatePaneID != nil && tmuxWindowID == nil }
+
+    /// Panes backed by a tmux window (claude/shell) — browser and diff
+    /// panes are app-local.
+    var isTerminal: Bool { kind == .claude || kind == .shell }
 }
 
 // MARK: Browser tabs

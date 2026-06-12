@@ -105,6 +105,7 @@ struct MainWindowView: View {
                 Divider()
                 Button("⏭ Tee up next…  ⌥⌘T") { app.showTeeUpSheet = true }
                 Button("💬 Chat pane (backlog ideas)") { app.addChatPane() }
+                Button("±  Diff review pane  ⇧⌘G") { app.addPane(kind: .diff) }
                 Divider()
                 Button("Shell pane — split right  ⌘D") { app.addPane(kind: .shell, axis: .horizontal) }
                 Button("Shell pane — split down  ⇧⌘D") { app.addPane(kind: .shell, axis: .vertical) }
