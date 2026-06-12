@@ -65,6 +65,10 @@ struct BuildwrightApp: App {
                 }
                 .keyboardShortcut("w", modifiers: .command)
                 Divider()
+                Button("Refresh Pane from tmux") { app.refreshFocusedPane() }
+                    .keyboardShortcut("r", modifiers: [.command, .shift])
+                Button("Refresh All Panes") { TerminalViewCache.shared.refreshAllPanes() }
+                Divider()
                 Button("Zoom Focused Pane") { app.toggleZoom() }
                     .keyboardShortcut(.return, modifiers: .command)
                 Button(app.broadcastMode ? "Disarm Broadcast Input" : "Broadcast Input to Tab") {
@@ -81,6 +85,8 @@ struct BuildwrightApp: App {
                     .keyboardShortcut("k", modifiers: [.command, .shift])
                 Button("Plan Backlog (AI)…") { app.showPlanSheet = true }
                     .keyboardShortcut("p", modifiers: [.command, .shift])
+                Divider()
+                Button("Copy Diagnostics Snapshot") { app.copyDiagnostics() }
             }
             CommandMenu("Focus") {
                 Button("Focus Pane Left") { app.movePaneFocus(.left) }

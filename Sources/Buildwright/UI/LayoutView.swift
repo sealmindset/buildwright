@@ -223,6 +223,10 @@ struct PaneContainerView: View {
         .frame(height: 22)
         .background(.bar)
         .contentShape(Rectangle())
+        .onTapGesture(count: 2) {
+            app.focusPane(pane.id)
+            app.toggleZoom()
+        }
         .onTapGesture { app.focusPane(pane.id) }
     }
 

@@ -107,6 +107,13 @@ struct BacklogSidebarView: View {
                         Text(epic.effort.uppercased())
                             .font(.system(size: 8, weight: .bold))
                             .foregroundStyle(.purple)
+                        if let item = app.backlogItem(byID: epic.id) {
+                            Button { app.startBacklogItem(item) } label: {
+                                Image(systemName: "play.fill").font(.system(size: 8))
+                            }
+                            .buttonStyle(.borderless)
+                            .help("Start \(epic.id) in a Claude pane (queues behind working panes automatically)")
+                        }
                     }
                 }
             }

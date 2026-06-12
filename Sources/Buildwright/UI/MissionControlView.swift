@@ -74,6 +74,7 @@ struct MissionControlView: View {
 }
 
 struct MissionControlCard: View {
+    @EnvironmentObject var app: AppState
     let entry: AppState.OverviewEntry
     let now: Date
 
@@ -127,6 +128,16 @@ struct MissionControlCard: View {
                 Text(stateLine)
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(state == .needsInput ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                Button {
+                    TerminalViewCache.shared.remove(entry.pane.id)
+                    app.closePane(entry.pane.id)
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
+                .help("Close this pane (kills its tmux window) — retire finished work without leaving mission control")
             }
             if let text = bodyText {
                 Text(text)

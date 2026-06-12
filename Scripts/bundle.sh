@@ -9,6 +9,9 @@ if [ -d "/Applications/Xcode.app" ]; then
   export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 fi
 
+VERSION="0.13.0"
+BUILD_NUMBER="10"
+
 echo "Building release binary..."
 swift build -c release
 
@@ -18,7 +21,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 cp ".build/release/Buildwright" "$APP/Contents/MacOS/Buildwright"
 
-cat > "$APP/Contents/Info.plist" <<'PLIST'
+cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -34,9 +37,9 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.12.1</string>
+    <string>${VERSION}</string>
     <key>CFBundleVersion</key>
-    <string>9</string>
+    <string>${BUILD_NUMBER}</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>NSHighResolutionCapable</key>
@@ -56,6 +59,13 @@ xattr -cr "$APP" 2>/dev/null || true
 codesign --force --deep --sign - "$APP"
 
 echo "Built $APP"
+
+# Rollback insurance: keep every version. A bad build never blocks work —
+#   rm -rf /Applications/Buildwright.app && cp -R dist/archive/Buildwright-<ver>.app /Applications/Buildwright.app
+mkdir -p dist/archive
+rm -rf "dist/archive/Buildwright-$VERSION.app"
+cp -R "$APP" "dist/archive/Buildwright-$VERSION.app"
+echo "Archived dist/archive/Buildwright-$VERSION.app"
 
 if [ "$1" = "--install" ]; then
   rm -rf "/Applications/Buildwright.app"

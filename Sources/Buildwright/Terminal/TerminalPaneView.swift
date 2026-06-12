@@ -74,6 +74,14 @@ final class ControlModeTerminalView: TerminalView, TerminalViewDelegate {
     /// buffer, and replay from tmux's current truth.
     func rebind(to newControl: TmuxControlClient) {
         control = newControl
+        refreshFromTmux()
+    }
+
+    /// The panic button: wipe the local buffer and rebuild the pane from
+    /// tmux's truth (history + screen + modes + cursor). Whatever display
+    /// weirdness happened, this clears it without touching the process.
+    func refreshFromTmux() {
+        guard control?.isAlive == true else { return }
         awaitingHistory = true
         getTerminal().resetToInitialState()
         TerminalViewCache.shared.startReplay(for: self)
@@ -315,6 +323,24 @@ final class TerminalViewCache: ObservableObject {
     }
 
     func contains(_ paneID: UUID) -> Bool { views[paneID] != nil }
+
+    func refreshPane(_ paneID: UUID) {
+        views[paneID]?.refreshFromTmux()
+    }
+
+    func refreshAllPanes() {
+        for view in views.values { view.refreshFromTmux() }
+    }
+
+    /// One-paste debugging: everything I need to diagnose a display issue.
+    func diagnosticLines() -> [String] {
+        views.map { id, view in
+            let t = view.getTerminal()
+            return "pane \(id.uuidString.prefix(8)) win=\(view.windowID) tmuxPane=\(view.paneID) " +
+                   "viewCols=\(t.cols)x\(t.rows) attached=\(view.window != nil) " +
+                   "state=\(runStates[id].map(String.init(describing:)) ?? "running")"
+        }.sorted()
+    }
 
     /// Bottom-most non-empty line currently visible in a pane — mission
     /// control's fallback when there's no transcript detail to show.

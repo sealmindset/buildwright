@@ -346,11 +346,20 @@ final class AppState: ObservableObject {
         let status: PaneStatus?
     }
 
-    /// Every terminal pane in every workspace, grouped by workspace — the
-    /// single-pane-of-glass data source. Browser panes are omitted (no
-    /// status, nothing to monitor).
+    /// Every terminal pane in every workspace, grouped by workspace and
+    /// sorted by urgency — who needs you first, then who's working, then
+    /// the rest. Browser/diff panes are omitted (nothing to monitor).
     var missionControlGroups: [(workspaceName: String, entries: [OverviewEntry])] {
-        workspaces.map { ws in
+        func urgency(_ e: OverviewEntry) -> Int {
+            if e.pane.isQueued { return 3 }
+            switch e.status?.state {
+            case .needsInput: return 0
+            case .working: return 1
+            case .done: return 2
+            default: return 4
+            }
+        }
+        return workspaces.map { ws in
             var entries: [OverviewEntry] = []
             for tab in ws.tabs {
                 for pane in tab.panes where pane.isTerminal {
@@ -359,6 +368,11 @@ final class AppState: ObservableObject {
                         tabID: tab.id, tabName: tab.name,
                         pane: pane, status: paneStatuses[pane.shortID]))
                 }
+            }
+            entries.sort { a, b in
+                let (ua, ub) = (urgency(a), urgency(b))
+                if ua != ub { return ua < ub }
+                return (a.status?.since ?? .distantFuture) < (b.status?.since ?? .distantFuture)
             }
             return (workspaceName: ws.name, entries: entries)
         }
@@ -798,6 +812,36 @@ final class AppState: ObservableObject {
     func addChatPane() {
         addPane(kind: .claude, directory: Config.backlogDirectory.path,
                 title: "chat", prompt: chatPrompt)
+    }
+
+    /// Panic button: rebuild the focused pane's display from tmux truth.
+    func refreshFocusedPane() {
+        guard let ws = activeWorkspace, let tab = ws.activeTab,
+              let focus = tab.focusedPaneID else { return }
+        TerminalViewCache.shared.refreshPane(focus)
+    }
+
+    /// One-paste debugging: app + tmux + per-pane size truth on the
+    /// clipboard, for reporting display issues without a screenshot hunt.
+    func copyDiagnostics() {
+        var lines: [String] = []
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
+        lines.append("Buildwright \(version) · \(Date())")
+        lines.append(ShellExec.run(["tmux", "-V"]).stdout.trimmingCharacters(in: .whitespacesAndNewlines))
+        lines.append("--- clients ---")
+        lines.append(ShellExec.run(["tmux", "list-clients", "-F",
+            "#{client_name} session=#{client_session} ctrl=#{client_control_mode} #{client_width}x#{client_height}"]).stdout)
+        for ws in workspaces {
+            lines.append("--- windows: \(ws.tmuxSessionName) ---")
+            lines.append(ShellExec.run(["tmux", "list-windows", "-t", "=\(ws.tmuxSessionName)",
+                "-F", "#{window_id} #{window_name} #{window_width}x#{window_height}"]).stdout)
+        }
+        lines.append("--- views ---")
+        lines.append(contentsOf: TerminalViewCache.shared.diagnosticLines())
+        lines.append("font=\(terminalFontSize) workspaces=\(workspaces.count) statuses=\(paneStatuses.count)")
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(lines.joined(separator: "\n"), forType: .string)
+        ShellExec.notify(title: "Diagnostics copied", body: "Paste into Claude Code to report an issue")
     }
 
     /// Bring a dead pane back: same kind, folder, and title, fresh tmux
