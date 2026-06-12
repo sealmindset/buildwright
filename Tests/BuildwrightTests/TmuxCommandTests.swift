@@ -8,7 +8,7 @@ struct TmuxCommandTests {
         #expect(TmuxClient.command(["list-sessions"]) == ["tmux", "list-sessions"])
     }
 
-    @Test func controlModeOutputUnescaping() {
+    @Test @MainActor func controlModeOutputUnescaping() {
         // tmux %output escapes non-printables and backslash as octal \ooo.
         #expect(TmuxControlClient.unescapeOctal("hello") == Array("hello".utf8))
         #expect(TmuxControlClient.unescapeOctal("\\033[1m") == [0x1B, 0x5B, 0x31, 0x6D])
