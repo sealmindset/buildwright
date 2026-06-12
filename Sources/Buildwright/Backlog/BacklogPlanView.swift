@@ -49,7 +49,39 @@ struct BacklogPlanView: View {
                         ForEach(Array(plan.epics.enumerated()), id: \.element.id) { (idx, epic) in
                             PlannedEpicCard(rank: idx + 1, epic: epic)
                         }
-                        Text("Sequence: dependencies first, then leverage, effort as tiebreaker — not the priority field. Starting items in order queues them through the safety gate automatically.")
+                        VStack(alignment: .leading, spacing: 6) {
+                            Label("Safe in parallel with #1", systemImage: "bolt.badge.checkmark")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.green)
+                            if let parallel = plan.parallelSafe, !parallel.isEmpty {
+                                ForEach(parallel) { item in
+                                    HStack(spacing: 6) {
+                                        Text(item.id).font(.caption.monospaced())
+                                        Text(item.title).font(.caption).lineLimit(1)
+                                        EffortBadge(effort: item.effort)
+                                        Spacer()
+                                        if let backlogItem = app.backlogItem(byID: item.id) {
+                                            Button { app.startBacklogItem(backlogItem) } label: {
+                                                Image(systemName: "play.fill").font(.caption)
+                                            }
+                                            .buttonStyle(.borderless)
+                                            .help("Starts in an isolated worktree alongside the active epic (one parallel lane max)")
+                                        }
+                                    }
+                                    Text("safe: \(item.safeBecause) · saves: \(item.saves)")
+                                        .font(.caption2).foregroundStyle(.secondary)
+                                        .padding(.leading, 2)
+                                }
+                            } else {
+                                Text("Nothing — linear is the play right now. Items not on this list queue behind the active epic.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        .padding(10)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(Color.green.opacity(0.06)))
+                        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.green.opacity(0.25)))
+
+                        Text("Sequence: dependencies first, then leverage, effort as tiebreaker — not the priority field. Starting items in order queues them through the safety gate automatically. Parallel work requires the whitelist above, no collision, and a free lane (one max).")
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
                             .padding(.top, 4)

@@ -7,6 +7,19 @@ import Foundation
 struct BacklogPlan: Codable, Equatable {
     var generatedAt: Date
     var epics: [PlannedEpic]
+    /// The whitelist: the ONLY items allowed to run alongside the active
+    /// epic. Parallel must be absolutely safe AND save real time toward
+    /// finishing the current epic — the burden of proof is on parallelism.
+    /// Empty means "linear is the play right now".
+    var parallelSafe: [ParallelItem]?
+
+    struct ParallelItem: Codable, Equatable, Identifiable {
+        var id: String          // story or small-epic itemID
+        var title: String
+        var effort: String      // S | M (never L)
+        var safeBecause: String // why it cannot collide with the active epic
+        var saves: String       // the time it buys toward epic completion
+    }
 
     struct PlannedEpic: Codable, Equatable, Identifiable {
         var id: String          // epic itemID, e.g. "EPIC-20"
@@ -129,35 +142,42 @@ final class BacklogPlanner: ObservableObject {
             }
             return
         }
-        guard let epics = Self.parsePlanEpics(fromCLIOutput: result.stdout), !epics.isEmpty else {
+        guard let parsed = Self.parsePlanPayload(fromCLIOutput: result.stdout), !parsed.epics.isEmpty else {
             state = .failed("Could not parse a plan from Claude's reply — try re-planning")
             if notifyFailure {
                 ShellExec.notify(title: "Backlog plan failed", body: "Reply was not valid plan JSON")
             }
             return
         }
-        let newPlan = BacklogPlan(generatedAt: Date(), epics: epics)
+        let newPlan = BacklogPlan(generatedAt: Date(), epics: parsed.epics, parallelSafe: parsed.parallelSafe)
         plan = newPlan
         state = .idle
         save(newPlan)
+        let parallelNote = (parsed.parallelSafe?.isEmpty ?? true)
+            ? "linear is the play"
+            : "parallel-safe: \(parsed.parallelSafe!.map(\.id).joined(separator: ", "))"
         ShellExec.notify(title: "Backlog plan ready",
-                         body: "First up: \(epics[0].id) — \(epics[0].title)")
+                         body: "First up: \(parsed.epics[0].id) — \(parsed.epics[0].title) · \(parallelNote)")
     }
 
     // MARK: Parsing
 
+    struct PlanPayload: Codable {
+        var epics: [BacklogPlan.PlannedEpic]
+        var parallelSafe: [BacklogPlan.ParallelItem]?
+    }
+
     /// `claude -p --output-format json` wraps the reply in an envelope:
     /// {"type":"result","result":"<text>",...}. The text should be our plan
     /// JSON, possibly wrapped in markdown fences despite instructions.
-    static func parsePlanEpics(fromCLIOutput stdout: String) -> [BacklogPlan.PlannedEpic]? {
+    static func parsePlanPayload(fromCLIOutput stdout: String) -> PlanPayload? {
         guard let envelope = try? JSONSerialization.jsonObject(
                 with: Data(stdout.utf8)) as? [String: Any],
               let text = envelope["result"] as? String else { return nil }
         guard let start = text.firstIndex(of: "{"),
               let end = text.lastIndex(of: "}") else { return nil }
         let json = String(text[start...end])
-        struct Payload: Codable { var epics: [BacklogPlan.PlannedEpic] }
-        return (try? decoder.decode(Payload.self, from: Data(json.utf8)))?.epics
+        return try? decoder.decode(PlanPayload.self, from: Data(json.utf8))
     }
 
     // MARK: Persistence
@@ -189,6 +209,14 @@ final class BacklogPlanner: ObservableObject {
                 out += "   - next: \(story.id) \(story.title) (\(story.effort)) — \(story.reason)\n"
             }
         }
+        out += "\n## Safe to run in parallel with #1\n\n"
+        if let parallel = plan.parallelSafe, !parallel.isEmpty {
+            for item in parallel {
+                out += "- **\(item.id) \(item.title)** (\(item.effort)) — safe: \(item.safeBecause) · saves: \(item.saves)\n"
+            }
+        } else {
+            out += "Nothing — linear is the play right now.\n"
+        }
         return out
     }
 
@@ -215,10 +243,21 @@ final class BacklogPlanner: ObservableObject {
     Mere topical overlap is NOT a conflict — overlapping work that cross-checks \
     itself is healthy. Be conservative: only flag real collisions.
 
+    Finally, the PARALLEL-SAFE WHITELIST. The working rule is LINEAR FIRST: \
+    parallel work is allowed only when it is absolutely safe AND saves real time \
+    toward completing the #1 epic before the next one starts. List at most 3 items \
+    (existing ids only) that may run alongside the #1 epic: independent stories \
+    within that epic touching disjoint files/subsystems, or standalone S/M quick \
+    wins with zero functional contact with it. S or M effort only — never L. For \
+    each: safeBecause (why it cannot collide) and saves (the time it buys). When \
+    in doubt, leave it OUT — an empty list ("linear is the play") is a good answer.
+
     Reply with ONLY a JSON object — no markdown fences, no commentary before or after:
     {"epics":[{"id":"EPIC-XX","title":"...","effort":"S","reason":"one line: why this position", \
     "dependsOn":["EPIC-YY"],"unblocks":["EPIC-ZZ"],"conflictsWith":["EPIC-WW"], \
-    "nextStories":[{"id":"EPIC-XX-S1","title":"...","effort":"S","reason":"one line"}]}]}
+    "nextStories":[{"id":"EPIC-XX-S1","title":"...","effort":"S","reason":"one line"}]}], \
+    "parallelSafe":[{"id":"EPIC-QQ","title":"...","effort":"S", \
+    "safeBecause":"one line","saves":"one line"}]}
     """
 
     // MARK: Coding

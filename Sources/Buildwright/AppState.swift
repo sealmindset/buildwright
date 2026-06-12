@@ -1290,6 +1290,9 @@ final class AppState: ObservableObject {
     func startBacklogItem(_ item: BacklogItem) {
         let prompt = "/backlog start \(item.itemID)"
         let epicID = epicID(of: item)
+        // Linear-first: with work already in progress, parallel needs three
+        // proofs — no collision, on the plan's parallel-safe whitelist, and
+        // a free lane (one max; your review attention is the bottleneck).
         if let blocker = activeCollidingEpic(for: epicID) {
             addPane(kind: .claude, title: item.itemID, prompt: prompt, gateEpicID: blocker)
             ShellExec.notify(title: "\(item.itemID) on deck",
@@ -1297,7 +1300,19 @@ final class AppState: ObservableObject {
         } else if let ws = activeWorkspace,
                   hasActiveEpic(besides: epicID),
                   workingClaudePane(inDirectory: ws.baseRepo, of: ws) != nil {
-            addPane(kind: .claude, title: item.itemID, prompt: prompt, worktree: true)
+            if !isParallelSafe(item) {
+                let blocker = primaryActiveEpic(besides: epicID) ?? "the active epic"
+                addPane(kind: .claude, title: item.itemID, prompt: prompt, gateEpicID: primaryActiveEpic(besides: epicID))
+                ShellExec.notify(title: "\(item.itemID) on deck",
+                                 body: "Not on the parallel-safe list — linear first; starts when \(blocker) is done")
+            } else if parallelLaneCount(in: ws) >= 1 {
+                let blocker = primaryActiveEpic(besides: epicID) ?? "the active epic"
+                addPane(kind: .claude, title: item.itemID, prompt: prompt, gateEpicID: primaryActiveEpic(besides: epicID))
+                ShellExec.notify(title: "\(item.itemID) on deck",
+                                 body: "Parallel lane busy (one at a time) — starts when \(blocker) is done")
+            } else {
+                addPane(kind: .claude, title: item.itemID, prompt: prompt, worktree: true)
+            }
         } else {
             addPane(kind: .claude, title: item.itemID, prompt: prompt)
         }
@@ -1305,6 +1320,40 @@ final class AppState: ObservableObject {
             workspaces[wi].activeBacklogItemID = item.itemID
             persist()
         }
+    }
+
+    /// Is this item on the plan's parallel-safe whitelist (itself, or — for
+    /// a story — listed via its exact id)?
+    private func isParallelSafe(_ item: BacklogItem) -> Bool {
+        guard let list = planner.plan?.parallelSafe else { return false }
+        return list.contains { $0.id == item.itemID }
+    }
+
+    /// The in-progress epic earliest in plan order — what linear-first work
+    /// waits behind.
+    private func primaryActiveEpic(besides epicID: String) -> String? {
+        let active = activeEpicIDs.subtracting([epicID])
+        guard !active.isEmpty else { return nil }
+        if let plan = planner.plan,
+           let first = plan.epics.first(where: { active.contains($0.id) }) {
+            return first.id
+        }
+        return active.sorted().first
+    }
+
+    /// Worktree-isolated claude panes currently running in this workspace —
+    /// the parallel lanes in use.
+    private func parallelLaneCount(in ws: Workspace) -> Int {
+        var count = 0
+        for tab in ws.tabs {
+            for pane in tab.panes
+            where pane.kind == .claude && pane.worktreeBranch != nil
+                && pane.tmuxWindowID != nil
+                && TerminalViewCache.shared.runStates[pane.id] == nil {
+                count += 1
+            }
+        }
+        return count
     }
 
     // MARK: Sequenced-epic policy
