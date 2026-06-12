@@ -87,6 +87,8 @@ struct BuildwrightApp: App {
                     .keyboardShortcut("p", modifiers: [.command, .shift])
                 Divider()
                 Button("Copy Diagnostics Snapshot") { app.copyDiagnostics() }
+                Button("Capture a Thought…") { app.showCapture = true }
+                    .keyboardShortcut("i", modifiers: [.command, .option])
             }
             CommandMenu("Focus") {
                 Button("Focus Pane Left") { app.movePaneFocus(.left) }

@@ -31,6 +31,9 @@ struct MainWindowView: View {
         .sheet(isPresented: $app.showPlanSheet) {
             BacklogPlanView(planner: app.planner)
         }
+        .sheet(isPresented: $app.showCapture) {
+            CaptureSheet()
+        }
     }
 
     private var mainArea: some View {

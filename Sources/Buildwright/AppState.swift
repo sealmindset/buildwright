@@ -77,6 +77,10 @@ final class AppState: ObservableObject {
         NotificationCenter.default.addObserver(forName: .bwSummon, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.showMissionControl = true }
         }
+        // System-wide ⌥⌘I → quick capture into the board's inbox.
+        NotificationCenter.default.addObserver(forName: .bwCapture, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.showCapture = true }
+        }
         tmux.claudeSkipPermissions = claudeSkipPermissions
         // Legacy sweep: remove hidden `_bw-` helper sessions left behind by
         // pre-control-mode builds (current design never creates them).
@@ -861,6 +865,32 @@ final class AppState: ObservableObject {
                     break // one re-plan covers simultaneous completions
                 }
             }
+    }
+
+    // MARK: Quick capture → triage inbox
+
+    @Published var showCapture = false
+
+    /// File a thought with zero decisions: it lands as a story under the
+    /// board's Inbox epic. Grooming (phase 3) suggests the real epic later.
+    func captureThought(_ text: String) {
+        let thought = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !thought.isEmpty else { return }
+        var inbox = backlog.epics.first { $0.epic.title.lowercased().hasPrefix("inbox") }
+        if inbox == nil {
+            backlog.createEpic(title: "Inbox", category: "triage", priority: "P3",
+                               body: "Quick-captured thoughts awaiting triage into real epics.")
+            backlog.reload()
+            inbox = backlog.epics.first { $0.epic.title.lowercased().hasPrefix("inbox") }
+        }
+        guard let inbox else {
+            ShellExec.notify(title: "Capture failed", body: "Could not create the Inbox epic")
+            return
+        }
+        let stamp = DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .short)
+        backlog.createStory(in: inbox, title: TranscriptReader.condense(thought, limit: 120),
+                            body: "Captured \(stamp) via ⌥⌘I — awaiting triage.\n\n\(thought)")
+        ShellExec.notify(title: "Captured", body: TranscriptReader.condense(thought, limit: 100))
     }
 
     // MARK: Chat pane (always parallel-safe)
