@@ -292,7 +292,11 @@ struct PaneStateOverlay: View {
                     .font(.system(size: 26)).foregroundStyle(.tertiary)
                 Text(state == .lost ? "tmux connection lost" : "process exited")
                     .font(.callout).foregroundStyle(.secondary)
-                Text("Scrollback above is intact — review it, restart, or close.")
+                // Only promise scrollback when there is some: a window that
+                // died before this pane was ever displayed has none.
+                Text(TerminalViewCache.shared.lastVisibleLine(for: pane.id) != nil
+                     ? "Scrollback above is intact — review it, restart, or close."
+                     : "The session ended before this pane was opened — nothing to show. Restart fresh or close.")
                     .font(.caption).foregroundStyle(.tertiary)
                 HStack {
                     Button("Restart") { app.restartPane(pane.id) }
