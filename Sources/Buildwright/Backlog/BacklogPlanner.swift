@@ -50,6 +50,38 @@ final class BacklogPlanner: ObservableObject {
         plan = try? Self.decoder.decode(BacklogPlan.self, from: data)
     }
 
+    /// Proactive planning: re-plan automatically when the board changed since
+    /// the last plan, or the plan is older than a day. Called once at launch
+    /// (after loadSavedPlan) so the sequence is simply THERE when you sit
+    /// down — no wand-clicking required.
+    func autoPlanIfStale() {
+        if case .running = state { return }
+        guard let plan else { runPlan(); return }
+        let age = Date().timeIntervalSince(plan.generatedAt)
+        if age > 24 * 3600 || boardChanged(since: plan.generatedAt) {
+            runPlan()
+        }
+    }
+
+    /// Newest mtime under BOARD.md and items/ — deliberately NOT the whole
+    /// backlog dir, because PLAN.md/.plan.json are written right after
+    /// planning and would make every plan look instantly stale.
+    private func boardChanged(since: Date) -> Bool {
+        let fm = FileManager.default
+        var newest = Date.distantPast
+        var paths = [Config.backlogDirectory.appendingPathComponent("BOARD.md")]
+        let items = Config.backlogDirectory.appendingPathComponent("items")
+        if let found = fm.enumerator(at: items, includingPropertiesForKeys: [.contentModificationDateKey]) {
+            for case let url as URL in found { paths.append(url) }
+        }
+        for url in paths {
+            if let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate {
+                newest = max(newest, mtime)
+            }
+        }
+        return newest > since
+    }
+
     /// Kick off a planning run (30–90s, fully in the background).
     func runPlan() {
         if case .running = state { return } // one at a time

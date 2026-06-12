@@ -6,7 +6,7 @@ struct MainWindowView: View {
     var body: some View {
         HSplitView {
             if app.sidebarVisible {
-                BacklogSidebarView(store: app.backlog)
+                BacklogSidebarView(store: app.backlog, planner: app.planner)
                     .frame(minWidth: 230, idealWidth: 280, maxWidth: 420)
             }
             mainArea

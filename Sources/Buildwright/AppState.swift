@@ -24,6 +24,7 @@ final class AppState: ObservableObject {
     let backlog = BacklogStore()
     let planner = BacklogPlanner()
     @Published var showPlanSheet = false
+    @Published var autoPlanOnLaunch = true
     private var statusMonitor: ClaudeStatusMonitor?
 
     var activeWorkspace: Workspace? {
@@ -62,6 +63,7 @@ final class AppState: ObservableObject {
             terminalFontSize = saved.terminalFontSize ?? 13
             layoutTemplates = saved.layoutTemplates ?? []
             if let p = saved.chatPrompt, !p.isEmpty { chatPrompt = p }
+            autoPlanOnLaunch = saved.autoPlanOnLaunch ?? true
         }
         TerminalViewCache.shared.applyFontSize(CGFloat(terminalFontSize))
         // System-wide ⌥⌘B → app forward + Mission Control.
@@ -79,6 +81,14 @@ final class AppState: ObservableObject {
         }
         backlog.startWatching()
         planner.loadSavedPlan()
+        // Proactive: re-plan when the board changed or the plan is stale,
+        // a few seconds after launch so it never competes with reattach.
+        if autoPlanOnLaunch {
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                self.planner.autoPlanIfStale()
+            }
+        }
         let monitor = ClaudeStatusMonitor { [weak self] statuses in
             Task { @MainActor in self?.applyStatuses(statuses) }
         }
@@ -124,7 +134,8 @@ final class AppState: ObservableObject {
             browserPrivateByDefault: browserPrivateByDefault,
             terminalFontSize: terminalFontSize,
             layoutTemplates: layoutTemplates,
-            chatPrompt: chatPrompt
+            chatPrompt: chatPrompt,
+            autoPlanOnLaunch: autoPlanOnLaunch
         ))
     }
 

@@ -13,6 +13,7 @@ struct AppPersistedState: Codable {
     var terminalFontSize: Double?
     var layoutTemplates: [LayoutTemplate]?
     var chatPrompt: String?
+    var autoPlanOnLaunch: Bool?
 }
 
 /// JSON persistence in ~/Library/Application Support/Buildwright/state.json.

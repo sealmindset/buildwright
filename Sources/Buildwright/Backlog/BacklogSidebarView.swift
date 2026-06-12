@@ -42,6 +42,7 @@ struct StatusDot: View {
 struct BacklogSidebarView: View {
     @EnvironmentObject var app: AppState
     @ObservedObject var store: BacklogStore
+    @ObservedObject var planner: BacklogPlanner
     @State private var expandedEpics: Set<String> = []
     @State private var detailItem: BacklogItem?
     @State private var detailEpicGroup: BacklogEpic?
@@ -52,6 +53,7 @@ struct BacklogSidebarView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+            upNextStrip
             Divider()
             filterBar
             Divider()
@@ -65,6 +67,53 @@ struct BacklogSidebarView: View {
         }
         .sheet(isPresented: $showNewEpic) {
             NewEpicSheet(store: store)
+        }
+    }
+
+    /// The AI build sequence's top three, always visible — click for the
+    /// full plan with reasoning. This is the "what should I do next" answer
+    /// without opening anything.
+    @ViewBuilder
+    private var upNextStrip: some View {
+        if case .running = planner.state {
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.mini)
+                Text("planning the board…")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+                Spacer()
+            }
+            .padding(.horizontal, 10).padding(.bottom, 6)
+        } else if let plan = planner.plan, !plan.epics.isEmpty {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack {
+                    Text("UP NEXT")
+                        .font(.system(size: 9, weight: .semibold)).kerning(1)
+                        .foregroundStyle(.purple)
+                    Spacer()
+                    Text(ageString(from: plan.generatedAt, to: app.now))
+                        .font(.system(size: 9)).foregroundStyle(.tertiary)
+                }
+                ForEach(Array(plan.epics.prefix(3).enumerated()), id: \.element.id) { (idx, epic) in
+                    HStack(spacing: 4) {
+                        Text("\(idx + 1).")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                        Text(epic.id)
+                            .font(.system(size: 10, design: .monospaced))
+                        Text(epic.title)
+                            .font(.system(size: 10)).lineLimit(1)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text(epic.effort.uppercased())
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(.purple)
+                    }
+                }
+            }
+            .padding(.horizontal, 10).padding(.bottom, 6)
+            .contentShape(Rectangle())
+            .onTapGesture { app.showPlanSheet = true }
+            .help("AI build sequence — click for the full plan and reasoning (⇧⌘P)")
         }
     }
 

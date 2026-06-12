@@ -246,6 +246,15 @@ struct SettingsView: View {
                 Text("Applies to new Claude panes. Existing panes keep the mode they started with.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section("Backlog planning") {
+                Toggle("Plan the backlog automatically at launch",
+                       isOn: Binding(
+                        get: { app.autoPlanOnLaunch },
+                        set: { app.autoPlanOnLaunch = $0; app.persist() }
+                       ))
+                Text("Re-plans when the board changed since the last plan or the plan is older than a day. One headless Claude session per run; results appear in the sidebar's Up Next strip and ⇧⌘P.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("Terminal") {
                 LabeledContent("Font size") {
                     HStack {
