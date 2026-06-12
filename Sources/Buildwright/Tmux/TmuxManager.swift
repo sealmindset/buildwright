@@ -52,6 +52,22 @@ final class TmuxManager {
         }
     }
 
+    /// Annealing pass: detect wedged control connections (alive but mute)
+    /// and kill them — the exit path reconnects and rebinds. Idle clients
+    /// get a ping so stalls are detectable even with no traffic.
+    func healthCheck() -> [String] {
+        var healed: [String] = []
+        for (session, control) in controlClients where control.isAlive {
+            if control.isStalled {
+                healed.append("control connection for \(session) wedged >10s — restarting")
+                control.forceTerminate()
+            } else {
+                control.ping()
+            }
+        }
+        return healed
+    }
+
     private func handleControlEvent(_ event: TmuxControlClient.Event, session: String) {
         switch event {
         case .output(let paneID, let bytes):

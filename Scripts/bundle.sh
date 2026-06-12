@@ -9,8 +9,8 @@ if [ -d "/Applications/Xcode.app" ]; then
   export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 fi
 
-VERSION="0.13.0"
-BUILD_NUMBER="10"
+VERSION="0.14.0"
+BUILD_NUMBER="11"
 
 echo "Building release binary..."
 swift build -c release

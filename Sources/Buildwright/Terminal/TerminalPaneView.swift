@@ -18,6 +18,13 @@ final class ControlModeTerminalView: TerminalView, TerminalViewDelegate {
     let sessionName: String
     private(set) weak var control: TmuxControlClient?
     private var awaitingHistory = true
+    /// Watchdog: when the in-flight replay started. A replay stuck past the
+    /// watchdog window means dropped output forever — heal by refreshing.
+    private var replayStartedAt = Date()
+
+    var replayStuckSeconds: TimeInterval? {
+        awaitingHistory ? Date().timeIntervalSince(replayStartedAt) : nil
+    }
 
     /// Size reconciliation state: what we last told tmux, what tmux last
     /// reported, and when. SwiftUI layout churn can swallow a trailing
@@ -83,6 +90,7 @@ final class ControlModeTerminalView: TerminalView, TerminalViewDelegate {
     func refreshFromTmux() {
         guard control?.isAlive == true else { return }
         awaitingHistory = true
+        replayStartedAt = Date()
         getTerminal().resetToInitialState()
         TerminalViewCache.shared.startReplay(for: self)
     }
@@ -330,6 +338,26 @@ final class TerminalViewCache: ObservableObject {
 
     func refreshAllPanes() {
         for view in views.values { view.refreshFromTmux() }
+    }
+
+    /// Annealing pass: replays stuck past the watchdog window restart from
+    /// tmux truth; a wedged connection underneath is handled by the
+    /// heartbeat (kill + reconnect), so this cannot loop forever silently.
+    func watchdogSweep() -> [String] {
+        var healed: [String] = []
+        for (id, view) in views {
+            if let stuck = view.replayStuckSeconds, stuck > 12 {
+                healed.append("pane \(id.uuidString.prefix(8)) replay stalled \(Int(stuck))s — refreshing from tmux")
+                view.refreshFromTmux()
+            }
+        }
+        return healed
+    }
+
+    /// Runtime liveness: a window that vanished without a %window-close
+    /// (missed event, sleep/wake gap) gets the exited overlay.
+    func markExited(_ paneID: UUID) {
+        if runStates[paneID] == nil { runStates[paneID] = .exited }
     }
 
     /// One-paste debugging: everything I need to diagnose a display issue.

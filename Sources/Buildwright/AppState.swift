@@ -39,6 +39,7 @@ final class AppState: ObservableObject {
 
     func bootstrap() {
         Config.ensureDirectories()
+        StateStore.shared.backupOnce() // known-good copy from before this session
         HooksInstaller.installIfNeeded()
         BWCLIInstaller.installIfNeeded()
 
@@ -81,6 +82,7 @@ final class AppState: ObservableObject {
         }
         backlog.startWatching()
         planner.loadSavedPlan()
+        startHealthLoop()
         // Proactive: re-plan when the board changed or the plan is stale,
         // a few seconds after launch so it never competes with reattach.
         if autoPlanOnLaunch {
@@ -814,6 +816,134 @@ final class AppState: ObservableObject {
                 title: "chat", prompt: chatPrompt)
     }
 
+    // MARK: Annealing (self-healing) loop
+
+    /// Every repair the app performed on itself, newest last — shown in the
+    /// diagnostics snapshot so healing never silently masks a bug.
+    @Published private(set) var healLog: [String] = []
+    private var healPassCount = 0
+
+    private func recordHeal(_ lines: [String]) {
+        guard !lines.isEmpty else { return }
+        let stamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
+        healLog.append(contentsOf: lines.map { "\(stamp) \($0)" })
+        if healLog.count > 50 { healLog.removeFirst(healLog.count - 50) }
+    }
+
+    func startHealthLoop() {
+        Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.healthPass() }
+        }
+    }
+
+    /// One annealing pass: each check heals toward verifiable ground truth
+    /// (tmux, the filesystem) — never toward the app's last write, which is
+    /// how self-healing turns into bug-masking.
+    private func healthPass() {
+        healPassCount += 1
+        var healed: [String] = []
+        healed += tmux.healthCheck()
+        healed += TerminalViewCache.shared.watchdogSweep()
+        healed += repairModelInvariants()
+        if healPassCount % 15 == 0 { // ~every 5 minutes
+            healed += pruneOrphanStatusFiles()
+        }
+        runtimeWindowSweep()
+        recordHeal(healed)
+    }
+
+    /// Pure-model invariants: every pane in its tab's layout, no layout
+    /// nodes for missing panes, focus and active-tab pointers valid.
+    private func repairModelInvariants() -> [String] {
+        var healed: [String] = []
+        for wi in workspaces.indices {
+            if let active = workspaces[wi].activeTabID,
+               !workspaces[wi].tabs.contains(where: { $0.id == active }) {
+                workspaces[wi].activeTabID = workspaces[wi].tabs.first?.id
+                healed.append("\(workspaces[wi].name): active tab pointed nowhere — reset")
+            }
+            for ti in workspaces[wi].tabs.indices {
+                let tab = workspaces[wi].tabs[ti]
+                let paneIDs = Set(tab.panes.map(\.id))
+                if let layout = tab.layout {
+                    for orphan in layout.paneIDs where !paneIDs.contains(orphan) {
+                        workspaces[wi].tabs[ti].layout = workspaces[wi].tabs[ti].layout?.removing(orphan)
+                        healed.append("\(workspaces[wi].name)/\(tab.name): layout node for missing pane — removed")
+                    }
+                }
+                let inLayout = Set(workspaces[wi].tabs[ti].layout?.paneIDs ?? [])
+                for pane in tab.panes where !inLayout.contains(pane.id) {
+                    if let layout = workspaces[wi].tabs[ti].layout {
+                        workspaces[wi].tabs[ti].layout = .split(
+                            axis: .horizontal, children: [layout, .pane(pane.id)], fractions: [0.7, 0.3])
+                    } else {
+                        workspaces[wi].tabs[ti].layout = .pane(pane.id)
+                    }
+                    healed.append("\(workspaces[wi].name)/\(tab.name): pane “\(pane.title)” was invisible — re-added to layout")
+                }
+                if let focus = workspaces[wi].tabs[ti].focusedPaneID, !paneIDs.contains(focus) {
+                    workspaces[wi].tabs[ti].focusedPaneID = tab.panes.first?.id
+                    healed.append("\(workspaces[wi].name)/\(tab.name): focus pointed at missing pane — reset")
+                }
+            }
+        }
+        if !healed.isEmpty { persist() }
+        return healed
+    }
+
+    /// Windows that vanished without a %window-close (missed event, sleep
+    /// gap): give the pane its exited overlay instead of a silent zombie.
+    private func runtimeWindowSweep() {
+        let snapshot = workspaces
+        Task.detached(priority: .utility) {
+            let client = TmuxClient()
+            var liveByWorkspace: [UUID: Set<String>] = [:]
+            for ws in snapshot {
+                let live = Set(client.listWindows(session: ws.tmuxSessionName).map { $0.id })
+                // Empty = session gone or CLI error; the control-client exit
+                // path owns that case. Only act on positive knowledge.
+                if !live.isEmpty { liveByWorkspace[ws.id] = live }
+            }
+            let result = liveByWorkspace
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                var healed: [String] = []
+                for ws in self.workspaces {
+                    guard let live = result[ws.id] else { continue }
+                    for tab in ws.tabs {
+                        for pane in tab.panes where pane.isTerminal && !pane.isQueued {
+                            guard let wid = pane.tmuxWindowID, !live.contains(wid),
+                                  TerminalViewCache.shared.runStates[pane.id] == nil,
+                                  TerminalViewCache.shared.contains(pane.id) else { continue }
+                            TerminalViewCache.shared.markExited(pane.id)
+                            healed.append("\(ws.name): window for “\(pane.title)” gone without close event — marked exited")
+                        }
+                    }
+                }
+                self.recordHeal(healed)
+            }
+        }
+    }
+
+    /// Status files whose pane no longer exists keep inflating the menu-bar
+    /// counts forever; sweep the stale ones.
+    private func pruneOrphanStatusFiles() -> [String] {
+        var healed: [String] = []
+        let known = Set(workspaces.flatMap { $0.tabs.flatMap { $0.panes.map(\.shortID) } })
+        let dir = Config.claudeStatusDirectory
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: [.contentModificationDateKey]) else { return [] }
+        for file in files {
+            let shortID = file.deletingPathExtension().lastPathComponent
+            guard !known.contains(shortID) else { continue }
+            let mtime = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+            guard Date().timeIntervalSince(mtime) > 3600 else { continue } // grace for races
+            try? FileManager.default.removeItem(at: file)
+            healed.append("orphan status file \(file.lastPathComponent) — removed")
+        }
+        return healed
+    }
+
     /// Panic button: rebuild the focused pane's display from tmux truth.
     func refreshFocusedPane() {
         guard let ws = activeWorkspace, let tab = ws.activeTab,
@@ -839,6 +969,10 @@ final class AppState: ObservableObject {
         lines.append("--- views ---")
         lines.append(contentsOf: TerminalViewCache.shared.diagnosticLines())
         lines.append("font=\(terminalFontSize) workspaces=\(workspaces.count) statuses=\(paneStatuses.count)")
+        if !healLog.isEmpty {
+            lines.append("--- self-healing log (newest last) ---")
+            lines.append(contentsOf: healLog.suffix(20))
+        }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(lines.joined(separator: "\n"), forType: .string)
         ShellExec.notify(title: "Diagnostics copied", body: "Paste into Claude Code to report an issue")

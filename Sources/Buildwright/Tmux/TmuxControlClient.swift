@@ -40,6 +40,25 @@ final class TmuxControlClient {
 
     /// Completions for in-flight commands, FIFO-matched to %begin/%end blocks.
     private var pending: [((ok: Bool, output: String)) -> Void] = []
+    /// Liveness: when the oldest unanswered command was sent (nil = idle).
+    /// Every reply proves the connection is moving, so it resets.
+    private var awaitingReplySince: Date?
+
+    /// A connection with a command unanswered for this long is wedged —
+    /// the process is alive but tmux stopped talking. Health loop kills it
+    /// and the normal exit path reconnects.
+    var isStalled: Bool {
+        awaitingReplySince.map { Date().timeIntervalSince($0) > 10 } ?? false
+    }
+
+    /// Cheap liveness probe; the reply (or its absence) feeds isStalled.
+    func ping() {
+        send("display-message -p ok")
+    }
+
+    func forceTerminate() {
+        process.terminate() // termination handler drives cleanup + reconnect
+    }
     /// Non-nil while inside a %begin block: collected payload lines.
     private var blockLines: [String]?
     private var blockIsError = false
@@ -110,6 +129,7 @@ final class TmuxControlClient {
             completion?((ok: false, output: "not connected"))
             return
         }
+        if pending.isEmpty { awaitingReplySince = Date() }
         pending.append(completion ?? { _ in })
         if let data = (command + "\n").data(using: .utf8) {
             stdinPipe.fileHandleForWriting.write(data)
@@ -240,6 +260,7 @@ final class TmuxControlClient {
                 blockLines = nil
                 if pending.isEmpty { return } // unsolicited block (initial attach greeting)
                 let completion = pending.removeFirst()
+                awaitingReplySince = pending.isEmpty ? nil : Date()
                 completion((ok: !isError, output: output))
             } else {
                 blockLines!.append(line)

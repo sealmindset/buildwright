@@ -33,6 +33,16 @@ final class StateStore {
         return try? JSONDecoder().decode(AppPersistedState.self, from: data)
     }
 
+    /// Once per launch: copy the last session's state aside before this
+    /// session writes anything. If a write ever corrupts state.json, the
+    /// layout/pane mapping is one file-copy away (tmux has the processes).
+    func backupOnce() {
+        let backup = Config.stateDirectory.appendingPathComponent("state-backup.json")
+        guard FileManager.default.fileExists(atPath: stateFile.path) else { return }
+        try? FileManager.default.removeItem(at: backup)
+        try? FileManager.default.copyItem(at: stateFile, to: backup)
+    }
+
     func save(_ state: AppPersistedState) {
         pendingWork?.cancel()
         let work = DispatchWorkItem { [stateFile] in
