@@ -39,7 +39,10 @@ final class ControlModeTerminalView: TerminalView, TerminalViewDelegate {
     /// Push the view's real size to tmux when anything drifted. External
     /// clients (iPad) win while they're actively resizing — we only reclaim
     /// after 10s of layout silence so we never fight a live remote session.
+    /// Detached views (tab switched away, mid-teardown) never drive sizes:
+    /// their frames pass through garbage during SwiftUI animations.
     func reconcileSize() {
+        guard window != nil else { return }
         guard control?.isAlive == true, !awaitingHistory else { return }
         let t = getTerminal()
         guard t.cols > 1, t.rows > 1 else { return }
@@ -129,6 +132,10 @@ final class ControlModeTerminalView: TerminalView, TerminalViewDelegate {
 
     func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
         guard !awaitingHistory else { return } // replay sends the final size
+        // Detached or mid-animation frames produce garbage dimensions
+        // (29-col slivers, 519-col doubles were observed live) — pushing
+        // them resizes the real pty and corrupts every TUI in the pane.
+        guard window != nil else { return }
         sendSize(cols: newCols, rows: newRows)
     }
 
@@ -337,6 +344,9 @@ struct TerminalPaneView: NSViewRepresentable {
             tv.frame = container.bounds
             tv.autoresizingMask = [.width, .height]
             container.addSubview(tv)
+            // Re-attached after a tab switch: push the real size once the
+            // frame settles (detached resizes were deliberately ignored).
+            DispatchQueue.main.async { tv.reconcileSize() }
         } else {
             let label = NSTextField(labelWithString: "tmux unavailable — install tmux and reopen this pane")
             label.frame = container.bounds
