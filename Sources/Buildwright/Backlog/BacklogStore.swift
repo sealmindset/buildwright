@@ -140,10 +140,36 @@ final class BacklogStore: ObservableObject {
     }
 
     func setStatus(_ item: BacklogItem, to status: String) {
-        updateItem(item) { fields in
-            Self.setField(&fields, "status", status)
-            Self.setField(&fields, "updated", Self.today)
+        guard let content = try? String(contentsOf: item.fileURL, encoding: .utf8) else { return }
+        var (fields, body) = Frontmatter.parse(content)
+        let old = fields.first { $0.0 == "status" }?.1 ?? "backlog"
+        guard old != status else { return }
+        Self.setField(&fields, "status", status)
+        Self.setField(&fields, "updated", Self.today)
+        body = Self.appendingHistory(to: body, line: "status \(old) → \(status)")
+        write(fields: fields, body: body, to: item.fileURL)
+    }
+
+    /// Traceability: append one event line to the item's own markdown —
+    /// the work history travels with the item, readable by anything.
+    func appendHistory(_ item: BacklogItem, _ line: String) {
+        guard let content = try? String(contentsOf: item.fileURL, encoding: .utf8) else { return }
+        var (fields, body) = Frontmatter.parse(content)
+        Self.setField(&fields, "updated", Self.today)
+        body = Self.appendingHistory(to: body, line: line)
+        write(fields: fields, body: body, to: item.fileURL)
+    }
+
+    nonisolated static func appendingHistory(to body: String, line: String) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH:mm"
+        var out = body
+        while out.hasSuffix("\n") || out.hasSuffix(" ") { out.removeLast() }
+        if !out.contains("\n## History") && !out.hasPrefix("## History") {
+            out += "\n\n## History\n"
         }
+        out += "\n- \(f.string(from: Date())) — \(line)\n"
+        return out
     }
 
     func updateTitleAndBody(_ item: BacklogItem, title: String, priority: String, body: String) {
@@ -154,13 +180,6 @@ final class BacklogStore: ObservableObject {
             Self.setField(&fields, "priority", priority)
         }
         Self.setField(&fields, "updated", Self.today)
-        write(fields: fields, body: body, to: item.fileURL)
-    }
-
-    private func updateItem(_ item: BacklogItem, mutate: (inout [(String, String)]) -> Void) {
-        guard let content = try? String(contentsOf: item.fileURL, encoding: .utf8) else { return }
-        var (fields, body) = Frontmatter.parse(content)
-        mutate(&fields)
         write(fields: fields, body: body, to: item.fileURL)
     }
 

@@ -68,6 +68,7 @@ final class AppState: ObservableObject {
             autoPlanOnLaunch = saved.autoPlanOnLaunch ?? true
             aiSpendUSD = saved.aiSpendUSD ?? 0
             aiSpendMonth = saved.aiSpendMonth ?? ""
+            dismissedDrift = Set(saved.dismissedDrift ?? [])
             // DECISIONS.md era: upgrade an unmodified chat prompt in place.
             if saved.chatPrompt == AppState.legacyChatPrompt { chatPrompt = AppState.defaultChatPrompt }
         }
@@ -108,9 +109,13 @@ final class AppState: ObservableObject {
         }
         monitor.start()
         statusMonitor = monitor
-        // Refresh visible status ages twice a minute.
+        // Refresh visible status ages twice a minute; drift rules have time
+        // thresholds, so they need the same heartbeat.
         Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.now = Date() }
+            Task { @MainActor in
+                self?.now = Date()
+                self?.recomputeDrift()
+            }
         }
         // Hooks keep writing while the app is closed, so after the first
         // status scan lands we can say what happened since last quit.
@@ -168,7 +173,8 @@ final class AppState: ObservableObject {
             chatPrompt: chatPrompt,
             autoPlanOnLaunch: autoPlanOnLaunch,
             aiSpendUSD: aiSpendUSD,
-            aiSpendMonth: aiSpendMonth
+            aiSpendMonth: aiSpendMonth,
+            dismissedDrift: dismissedDrift.sorted()
         ))
     }
 
@@ -180,6 +186,7 @@ final class AppState: ObservableObject {
             snapshotActiveWorkspace()
             persist()
             releaseQueuedPanes() // a gate may just have finished
+            recomputeDrift()
         }
         // Notify when an unfocused pane flips to needsInput or done.
         guard let ws = activeWorkspace, let tab = ws.activeTab else { return }
@@ -784,6 +791,9 @@ final class AppState: ObservableObject {
                 pane.queuedPrompt = nil
                 workspaces[wi].tabs[ti].panes[pi] = pane
                 ShellExec.notify(title: "On deck pane started", body: "“\(pane.title)” in \(ws.name) is now running")
+                if backlogItem(byID: pane.title) != nil {
+                    recordItemEvent(pane.title, "on-deck gate released — session started")
+                }
                 persist()
                 return
             }
@@ -852,8 +862,10 @@ final class AppState: ObservableObject {
                 defer { self.lastEpicStatuses = current }
                 // First observation is a baseline, not a transition.
                 guard !self.lastEpicStatuses.isEmpty else { return }
-                // Any board change can release an epic collision gate.
+                // Any board change can release an epic collision gate, and
+                // changes (mark done, etc.) can clear or create drift.
                 self.releaseQueuedPanes()
+                self.recomputeDrift()
                 // Epic completed → reassess the plan with a loose-ends hunt.
                 for (id, status) in current
                 where (status == "done" || status == "closed")
@@ -949,11 +961,16 @@ final class AppState: ObservableObject {
                     lastCheckpointAt[pane.id] = Date()
                     let dir = pane.directory
                     let title = pane.title
+                    let branch = pane.worktreeBranch ?? ""
                     Task.detached(priority: .utility) { [weak self] in
                         let result = GitWorktree.checkpoint(dir: dir)
                         if let result {
                             await MainActor.run { [weak self] in
-                                self?.recordHeal(["checkpoint “\(title)”: \(result)"])
+                                guard let self else { return }
+                                self.recordHeal(["checkpoint “\(title)”: \(result)"])
+                                if self.backlogItem(byID: title) != nil {
+                                    self.recordItemEvent(title, "checkpoint on \(branch): \(result)")
+                                }
                             }
                         }
                     }
@@ -1028,6 +1045,9 @@ final class AppState: ObservableObject {
         healed += repairModelInvariants()
         if healPassCount % 15 == 0 { // ~every 5 minutes
             healed += pruneOrphanStatusFiles()
+        }
+        if healPassCount % 3 == 0 { // ~once a minute: merged-branch drift
+            scanMergedBranches()
         }
         runtimeWindowSweep()
         recordHeal(healed)
@@ -1450,6 +1470,7 @@ final class AppState: ObservableObject {
             addPane(kind: .claude, title: item.itemID, prompt: prompt, gateEpicID: blocker)
             ShellExec.notify(title: "\(item.itemID) on deck",
                              body: "Collides with \(blocker) (same functionality) — starts when \(blocker) is done")
+            recordItemEvent(item.itemID, "queued on deck behind \(blocker) (epic collision)")
         } else if let ws = activeWorkspace,
                   hasActiveEpic(besides: epicID),
                   workingClaudePane(inDirectory: ws.baseRepo, of: ws) != nil {
@@ -1458,16 +1479,20 @@ final class AppState: ObservableObject {
                 addPane(kind: .claude, title: item.itemID, prompt: prompt, gateEpicID: primaryActiveEpic(besides: epicID))
                 ShellExec.notify(title: "\(item.itemID) on deck",
                                  body: "Not on the parallel-safe list — linear first; starts when \(blocker) is done")
+                recordItemEvent(item.itemID, "queued on deck behind \(blocker) (linear-first)")
             } else if parallelLaneCount(in: ws) >= 1 {
                 let blocker = primaryActiveEpic(besides: epicID) ?? "the active epic"
                 addPane(kind: .claude, title: item.itemID, prompt: prompt, gateEpicID: primaryActiveEpic(besides: epicID))
                 ShellExec.notify(title: "\(item.itemID) on deck",
                                  body: "Parallel lane busy (one at a time) — starts when \(blocker) is done")
+                recordItemEvent(item.itemID, "queued on deck behind \(blocker) (parallel lane busy)")
             } else {
                 addPane(kind: .claude, title: item.itemID, prompt: prompt, worktree: true)
+                recordItemEvent(item.itemID, "session started in an isolated worktree")
             }
         } else {
             addPane(kind: .claude, title: item.itemID, prompt: prompt)
+            recordItemEvent(item.itemID, "session opened in \(activeWorkspace?.name ?? "the workspace")")
         }
         if let wi = activeWorkspaceIndex {
             workspaces[wi].activeBacklogItemID = item.itemID
@@ -1637,6 +1662,116 @@ final class AppState: ObservableObject {
             workspaces[wi].activeBacklogItemID = nil
             persist()
         }
+    }
+
+    // MARK: Board drift (board ↔ reality; suggest one click, never auto-apply)
+
+    @Published private(set) var driftSuggestions: [DriftSuggestion] = []
+    /// Suggestion ids the user rejected — suppressed for as long as the
+    /// condition keeps holding, wiped when it clears (a recurrence is news).
+    var dismissedDrift: Set<String> = []
+    /// Item ids whose worktree branch landed in the base branch.
+    private var mergedItemIDs: Set<String> = []
+
+    func recomputeDrift() {
+        var signals: [BoardDrift.PaneSignal] = []
+        for ws in workspaces {
+            for tab in ws.tabs {
+                for pane in tab.panes where pane.kind == .claude {
+                    let st = paneStatuses[pane.shortID]
+                    signals.append(BoardDrift.PaneSignal(
+                        title: pane.title, isQueued: pane.isQueued,
+                        state: st?.state, since: st?.since))
+                }
+            }
+        }
+        let raw = BoardDrift.detect(epics: backlog.epics, panes: signals,
+                                    mergedItemIDs: mergedItemIDs, now: now)
+        let rawIDs = Set(raw.map(\.id))
+        let pruned = dismissedDrift.intersection(rawIDs)
+        if pruned != dismissedDrift {
+            dismissedDrift = pruned
+            persist()
+        }
+        let visible = raw.filter { !dismissedDrift.contains($0.id) }
+        if visible != driftSuggestions { driftSuggestions = visible }
+    }
+
+    func applyDrift(_ s: DriftSuggestion) {
+        guard let item = backlogItem(byID: s.itemID) else { return }
+        backlog.setStatus(item, to: s.suggested) // records its own history line
+        driftSuggestions.removeAll { $0.id == s.id }
+        recomputeDrift()
+    }
+
+    func dismissDrift(_ s: DriftSuggestion) {
+        dismissedDrift.insert(s.id)
+        driftSuggestions.removeAll { $0.id == s.id }
+        persist()
+    }
+
+    /// Health-loop sweep: which open worktree panes' branches already landed
+    /// in the base? Detected via --no-ff merge commits, NOT `branch --merged`
+    /// (a fresh branch with no commits sits at the base tip and would read
+    /// as merged on day one).
+    func scanMergedBranches() {
+        var jobs: [(repo: String, branchItems: [(branch: String, itemID: String)])] = []
+        for ws in workspaces {
+            var branchItems: [(String, String)] = []
+            for tab in ws.tabs {
+                for pane in tab.panes {
+                    if let branch = pane.worktreeBranch, backlogItem(byID: pane.title) != nil {
+                        branchItems.append((branch, pane.title))
+                    }
+                }
+            }
+            if !branchItems.isEmpty { jobs.append((ws.baseRepo, branchItems)) }
+        }
+        guard !jobs.isEmpty else {
+            if !mergedItemIDs.isEmpty { mergedItemIDs = []; recomputeDrift() }
+            return
+        }
+        Task.detached(priority: .utility) { [weak self] in
+            var merged = Set<String>()
+            for job in jobs {
+                let base = GitDiff.defaultBranch(repo: job.repo)
+                let log = ShellExec.run(["git", "-C", job.repo, "log", base,
+                                         "--merges", "--format=%s", "-n", "300"])
+                guard log.ok else { continue }
+                for (branch, itemID) in job.branchItems where log.stdout.contains(branch) {
+                    merged.insert(itemID)
+                }
+            }
+            let found = merged
+            await MainActor.run { [weak self] in
+                guard let self, self.mergedItemIDs != found else { return }
+                self.mergedItemIDs = found
+                self.recomputeDrift()
+            }
+        }
+    }
+
+    /// Called by the diff pane the moment its guarded merge succeeds —
+    /// instant traceability + drift signal, no waiting for the sweep.
+    func noteMerge(branch: String) {
+        for ws in workspaces {
+            for tab in ws.tabs {
+                for pane in tab.panes where pane.worktreeBranch == branch {
+                    guard backlogItem(byID: pane.title) != nil else { return }
+                    recordItemEvent(pane.title, "merged \(branch) into the base branch")
+                    mergedItemIDs.insert(pane.title)
+                    recomputeDrift()
+                    return
+                }
+            }
+        }
+    }
+
+    // MARK: Item traceability (history lives in the item's own markdown)
+
+    func recordItemEvent(_ itemID: String, _ line: String) {
+        guard let item = backlogItem(byID: itemID) else { return }
+        backlog.appendHistory(item, line)
     }
 
     // MARK: Backlog filters (per workspace)

@@ -284,6 +284,7 @@ struct DiffPaneView: View {
                 switch result {
                 case .success(let message):
                     ShellExec.notify(title: "Merged", body: message)
+                    app.noteMerge(branch: branch) // traceability + drift chip
                     refresh()
                 case .failure(let why):
                     ShellExec.notify(title: "Merge not done", body: why)

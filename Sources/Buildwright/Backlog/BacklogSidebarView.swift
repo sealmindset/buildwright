@@ -54,6 +54,7 @@ struct BacklogSidebarView: View {
         VStack(spacing: 0) {
             header
             upNextStrip
+            driftStrip
             Divider()
             filterBar
             Divider()
@@ -121,6 +122,59 @@ struct BacklogSidebarView: View {
             .contentShape(Rectangle())
             .onTapGesture { app.showPlanSheet = true }
             .help("AI build sequence — click for the full plan and reasoning (⇧⌘P)")
+        }
+    }
+
+    /// Board ↔ reality mismatches with one-click fixes. Suggestions only —
+    /// ✓ applies the status change, × hides it for as long as the condition
+    /// holds. The board is never changed automatically.
+    @ViewBuilder
+    private var driftStrip: some View {
+        if !app.driftSuggestions.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.system(size: 8, weight: .bold))
+                    Text("BOARD DRIFT")
+                        .font(.system(size: 9, weight: .semibold)).kerning(1)
+                    Spacer()
+                }
+                .foregroundStyle(.orange)
+                ForEach(app.driftSuggestions) { s in
+                    VStack(alignment: .leading, spacing: 1) {
+                        HStack(spacing: 4) {
+                            Text(s.itemID)
+                                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            Text("\(s.current) → \(s.suggested)?")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                            Spacer()
+                            Button { app.applyDrift(s) } label: {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.orange)
+                            }
+                            .buttonStyle(.borderless)
+                            .help("Set \(s.itemID) to \(s.suggested) on the board")
+                            Button { app.dismissDrift(s) } label: {
+                                Image(systemName: "xmark.circle")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.tertiary)
+                            }
+                            .buttonStyle(.borderless)
+                            .help("Not drift — hide while this condition holds")
+                        }
+                        Text(s.reason)
+                            .font(.system(size: 9))
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                            .help(s.reason)
+                    }
+                }
+            }
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .background(Color.orange.opacity(0.07))
         }
     }
 

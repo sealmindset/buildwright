@@ -16,6 +16,7 @@ struct AppPersistedState: Codable {
     var autoPlanOnLaunch: Bool?
     var aiSpendUSD: Double?
     var aiSpendMonth: String?
+    var dismissedDrift: [String]?
 }
 
 /// JSON persistence in ~/Library/Application Support/Buildwright/state.json.
