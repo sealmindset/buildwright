@@ -66,7 +66,12 @@ final class AppState: ObservableObject {
             layoutTemplates = saved.layoutTemplates ?? []
             if let p = saved.chatPrompt, !p.isEmpty { chatPrompt = p }
             autoPlanOnLaunch = saved.autoPlanOnLaunch ?? true
+            aiSpendUSD = saved.aiSpendUSD ?? 0
+            aiSpendMonth = saved.aiSpendMonth ?? ""
+            // DECISIONS.md era: upgrade an unmodified chat prompt in place.
+            if saved.chatPrompt == AppState.legacyChatPrompt { chatPrompt = AppState.defaultChatPrompt }
         }
+        planner.onCost = { [weak self] usd in self?.recordAISpend(usd) }
         TerminalViewCache.shared.applyFontSize(CGFloat(terminalFontSize))
         // System-wide ⌥⌘B → app forward + Mission Control.
         NotificationCenter.default.addObserver(forName: .bwSummon, object: nil, queue: .main) { [weak self] _ in
@@ -85,6 +90,7 @@ final class AppState: ObservableObject {
         planner.loadSavedPlan()
         startHealthLoop()
         startBoardWatcher()
+        startIncidentProbe()
         // Proactive: re-plan when the board changed or the plan is stale,
         // a few seconds after launch so it never competes with reattach.
         if autoPlanOnLaunch {
@@ -156,7 +162,9 @@ final class AppState: ObservableObject {
             terminalFontSize: terminalFontSize,
             layoutTemplates: layoutTemplates,
             chatPrompt: chatPrompt,
-            autoPlanOnLaunch: autoPlanOnLaunch
+            autoPlanOnLaunch: autoPlanOnLaunch,
+            aiSpendUSD: aiSpendUSD,
+            aiSpendMonth: aiSpendMonth
         ))
     }
 
@@ -175,6 +183,9 @@ final class AppState: ObservableObject {
         for (shortID, status) in statuses {
             guard previous[shortID]?.state != status.state, shortID != focusedShortID else { continue }
             guard let title = paneTitle(forShortID: shortID) else { continue }
+            if status.state == .needsInput || status.state == .done {
+                checkpointIfWorktree(shortID)
+            }
             switch status.state {
             case .needsInput:
                 let what = status.detail ?? "is waiting for your input"
@@ -854,7 +865,7 @@ final class AppState: ObservableObject {
 
     // MARK: Chat pane (always parallel-safe)
 
-    static let defaultChatPrompt = """
+    static let legacyChatPrompt = """
     You are a thinking partner, not an implementer. We're going to talk through ideas — \
     new features, fixes, architecture, priorities. Push back on weak ideas, ask clarifying \
     questions, and explore trade-offs honestly.
@@ -865,6 +876,12 @@ final class AppState: ObservableObject {
     conversation and backlog entries.
     """
 
+    static let defaultChatPrompt = legacyChatPrompt + """
+    \n\nWhen we make a significant decision (architecture, workflow, technology, scope), \
+    append it to DECISIONS.md in this directory: one paragraph with context, the choice, \
+    why, and the alternatives we rejected.
+    """
+
     @Published var chatPrompt: String = AppState.defaultChatPrompt
 
     /// Chat panes live in the backlog directory: discussion in, backlog items
@@ -872,6 +889,82 @@ final class AppState: ObservableObject {
     func addChatPane() {
         addPane(kind: .claude, directory: Config.backlogDirectory.path,
                 title: "chat", prompt: chatPrompt)
+    }
+
+    // MARK: AI-feature spend (planner/review runs; pane sessions show their own)
+
+    @Published private(set) var aiSpendUSD: Double = 0
+    private var aiSpendMonth = ""
+
+    func recordAISpend(_ usd: Double) {
+        let month = String(ISO8601DateFormatter().string(from: Date()).prefix(7))
+        if month != aiSpendMonth { aiSpendMonth = month; aiSpendUSD = 0 }
+        aiSpendUSD += usd
+        persist()
+    }
+
+    // MARK: Worktree checkpoints (bus-factor insurance)
+
+    private var lastCheckpointAt: [UUID: Date] = [:]
+
+    /// Pane paused (done / needs-you) in a worktree: push the work off this
+    /// machine. Throttled; failures land in the heal log, not your face.
+    private func checkpointIfWorktree(_ shortID: String) {
+        for ws in workspaces {
+            for tab in ws.tabs {
+                for pane in tab.panes
+                where pane.shortID == shortID && pane.worktreeBranch != nil {
+                    let last = lastCheckpointAt[pane.id] ?? .distantPast
+                    guard Date().timeIntervalSince(last) > 600 else { return }
+                    lastCheckpointAt[pane.id] = Date()
+                    let dir = pane.directory
+                    let title = pane.title
+                    Task.detached(priority: .utility) { [weak self] in
+                        let result = GitWorktree.checkpoint(dir: dir)
+                        if let result {
+                            await MainActor.run { [weak self] in
+                                self?.recordHeal(["checkpoint “\(title)”: \(result)"])
+                            }
+                        }
+                    }
+                    return
+                }
+            }
+        }
+    }
+
+    // MARK: Production incident probe
+
+    private var lastProbeOutput: [UUID: String] = [:]
+
+    func startIncidentProbe() {
+        Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.runIncidentProbes() }
+        }
+    }
+
+    private func runIncidentProbes() {
+        for ws in workspaces {
+            guard let cmd = ws.incidentProbeCommand, !cmd.isEmpty else { continue }
+            let wsID = ws.id, wsName = ws.name, repo = ws.baseRepo
+            Task.detached(priority: .utility) { [weak self] in
+                let result = ShellExec.run(["sh", "-c", cmd], cwd: repo)
+                let output = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard result.ok, !output.isEmpty else { return }
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    // Same evidence as last time = same incident; don't refile.
+                    guard self.lastProbeOutput[wsID] != output else { return }
+                    self.lastProbeOutput[wsID] = output
+                    self.backlog.createEpic(
+                        title: "Breakfix: production incident (\(wsName))",
+                        category: "breakfix", priority: "P1",
+                        body: "Filed automatically by the incident probe.\n\nEvidence:\n```\n\(TranscriptReader.condense(output, limit: 2000))\n```")
+                    ShellExec.notify(title: "Production incident — breakfix filed",
+                                     body: TranscriptReader.condense(output, limit: 120))
+                }
+            }
+        }
     }
 
     // MARK: Annealing (self-healing) loop
@@ -1074,6 +1167,12 @@ final class AppState: ObservableObject {
                 return
             }
         }
+    }
+
+    func setTestCommand(_ cmd: String, forWorkspace id: UUID) {
+        guard let wi = workspaces.firstIndex(where: { $0.id == id }) else { return }
+        workspaces[wi].testCommand = cmd
+        persist()
     }
 
     /// Open a read-only diff pane beside a terminal pane, reviewing that

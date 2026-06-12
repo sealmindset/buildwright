@@ -44,6 +44,24 @@ enum GitWorktree {
         return ShellExec.run(["git", "-C", repo, "worktree", "remove", path]).ok
     }
 
+    /// Checkpoint in-flight agent work off this machine: commit WIP if dirty,
+    /// push the branch. Returns a description of what happened, nil if no-op.
+    static func checkpoint(dir: String) -> String? {
+        let dirty = ShellExec.run(["git", "-C", dir, "status", "--porcelain"])
+        guard dirty.ok else { return nil }
+        var actions: [String] = []
+        if !dirty.stdout.isEmpty {
+            _ = ShellExec.run(["git", "-C", dir, "add", "-A"])
+            let commit = ShellExec.run(["git", "-C", dir, "commit", "--no-verify",
+                                        "-m", "WIP checkpoint (Buildwright auto)"])
+            if commit.ok { actions.append("committed WIP") }
+        }
+        let push = ShellExec.run(["git", "-C", dir, "push", "-u", "origin", "HEAD"])
+        if push.ok { actions.append("pushed") }
+        else if !actions.isEmpty { actions.append("push failed: \(TranscriptReader.condense(push.stderr, limit: 80))") }
+        return actions.isEmpty ? nil : actions.joined(separator: ", ")
+    }
+
     /// "Fix the login crash!" → "fix-the-login-crash" (branch/dir safe).
     static func slug(from text: String) -> String {
         var out = ""

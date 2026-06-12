@@ -58,6 +58,8 @@ final class BacklogPlanner: ObservableObject {
 
     @Published var state: State = .idle
     @Published var plan: BacklogPlan?
+    /// Reports the dollar cost of each headless run (AI-spend tracking).
+    var onCost: ((Double) -> Void)?
 
     var planJSONFile: URL { Config.backlogDirectory.appendingPathComponent(".plan.json") }
     var planMarkdownFile: URL { Config.backlogDirectory.appendingPathComponent("PLAN.md") }
@@ -115,9 +117,11 @@ final class BacklogPlanner: ObservableObject {
             prompt += """
             \n\nIMPORTANT: epic \(completedEpic) was JUST completed. Before sequencing, \
             examine it for loose ends — stories still open under it, follow-up work named \
-            in its design doc or story notes, anything it promised but deferred. If real \
-            loose ends exist, surface them first (as nextStories of the epic that owns \
-            them, or as the top item) with reason "loose end from \(completedEpic)".
+            in its design doc or story notes, anything it promised but deferred. Check this \
+            DEFINITION OF DONE explicitly: tests green in CI; security review done; docs \
+            updated; deployed/promoted through the release lane. Anything unmet is a loose \
+            end. Surface loose ends first (as nextStories of the epic that owns them, or as \
+            the top item) with reason "loose end from \(completedEpic)".
             """
         }
         let cwd = Config.backlogDirectory.path
@@ -134,6 +138,10 @@ final class BacklogPlanner: ObservableObject {
     }
 
     private func finish(_ result: ShellResult) {
+        if let envelope = try? JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any],
+           let cost = envelope["total_cost_usd"] as? Double {
+            onCost?(cost)
+        }
         guard result.ok else {
             let why = result.stderr.isEmpty ? "claude exited \(result.status) — is Claude Code installed and logged in?" : result.stderr
             state = .failed(TranscriptReader.condense(why, limit: 200))
@@ -225,7 +233,8 @@ final class BacklogPlanner: ObservableObject {
     static let planningPrompt = """
     You are the strategic planner for this backlog board (the current directory). \
     Read BOARD.md and the items/ tree — including each epic's design.md where present — \
-    then produce a build sequence: what to work on first, second, third.
+    and DECISIONS.md if it exists (recorded decisions constrain the plan). \
+    Then produce a build sequence: what to work on first, second, third.
 
     Ordering rules, in priority order:
     1. Foundations first: anything other items need must come before them (dependency feasibility).

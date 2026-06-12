@@ -14,6 +14,8 @@ struct AppPersistedState: Codable {
     var layoutTemplates: [LayoutTemplate]?
     var chatPrompt: String?
     var autoPlanOnLaunch: Bool?
+    var aiSpendUSD: Double?
+    var aiSpendMonth: String?
 }
 
 /// JSON persistence in ~/Library/Application Support/Buildwright/state.json.

@@ -18,6 +18,11 @@ struct BacklogPlanView: View {
                     Text("generated \(ageString(from: plan.generatedAt, to: app.now)) ago")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+                if app.aiSpendUSD > 0 {
+                    Text(String(format: "AI spend this month: $%.2f", app.aiSpendUSD))
+                        .font(.caption).foregroundStyle(.tertiary)
+                        .help("Cost of headless runs Buildwright triggered (plans, reviews). Pane sessions show their own spend in Claude Code's status line.")
+                }
                 Spacer()
                 switch planner.state {
                 case .running(let since):

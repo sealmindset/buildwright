@@ -80,6 +80,13 @@ struct Workspace: Identifiable, Codable, Equatable {
         }
     }
 
+    /// Command that runs this project's test suite (merge gate). nil = ask
+    /// at first merge; empty string = gate explicitly disabled.
+    var testCommand: String?
+    /// Shell command probed every 5 min; non-empty stdout files a breakfix
+    /// backlog item with the output as evidence. nil/empty = off.
+    var incidentProbeCommand: String?
+
     /// tmux session name == sanitized workspace name, so iPad attach is just
     /// `tmux attach -t <name>`. tmux forbids ':' and '.' in session names.
     var tmuxSessionName: String {

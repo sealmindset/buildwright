@@ -155,7 +155,121 @@ struct DiffPaneView: View {
         }
     }
 
+    /// Diffs touching these surfaces (or very large diffs) require the
+    /// independent fresh-context review before merging.
+    private var isRiskyDiff: Bool {
+        if added + removed > 400 { return true }
+        let riskyMarkers = ["prisma/", "migrations", "Dockerfile", "terraform",
+                            ".env", "auth", "docker-compose", ".github/workflows"]
+        return lines.contains { line in
+            line.kind == .file && riskyMarkers.contains { line.text.localizedCaseInsensitiveContains($0) }
+        }
+    }
+
+    @State private var gateBusy = false
+    @State private var reviewApproved = false
+
+    /// The merge gauntlet: tests must pass (hard gate, per-workspace command,
+    /// asked once), risky diffs need the independent review, THEN merge.
     private func confirmMerge(branch: String) {
+        guard !gateBusy, let ws = app.activeWorkspace else { return }
+        var cmd = ws.testCommand
+        if cmd == nil {
+            cmd = promptForTestCommand()
+            guard let entered = cmd else { return } // cancelled
+            app.setTestCommand(entered, forWorkspace: ws.id)
+        }
+        if isRiskyDiff && !reviewApproved {
+            runIndependentReview(branch: branch, thenTests: cmd ?? "")
+            return
+        }
+        runTestsThenMerge(branch: branch, testCommand: cmd ?? "")
+    }
+
+    /// nil = cancelled; "" = user disabled the gate for this workspace.
+    private func promptForTestCommand() -> String? {
+        let alert = NSAlert()
+        alert.messageText = "Test command for this project?"
+        alert.informativeText = "Runs in the worktree before every merge; red tests block the merge. Leave empty to disable the gate for this workspace."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        field.placeholderString = "e.g. npm test"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        return field.stringValue.trimmingCharacters(in: .whitespaces)
+    }
+
+    private func runIndependentReview(branch: String, thenTests cmd: String) {
+        gateBusy = true
+        let dir = pane.directory
+        let base = baseBranch
+        ShellExec.notify(title: "Independent review running", body: "Fresh-context pass over \(branch) — risky surface detected")
+        DispatchQueue.global(qos: .userInitiated).async {
+            let prompt = """
+            You are an independent reviewer with NO context from the implementation. \
+            Run `git diff \(base)...HEAD` and review every change for bugs, security \
+            issues, schema/config hazards, and unintended behavior. Reply ONLY with \
+            JSON: {"verdict":"approve"|"concerns","notes":["one line each"]}
+            """
+            let result = ShellExec.run(
+                ["claude", "-p", prompt, "--output-format", "json",
+                 "--allowedTools", "Read,Glob,Grep,Bash(git diff:*),Bash(git log:*),Bash(git show:*)"],
+                cwd: dir)
+            DispatchQueue.main.async {
+                gateBusy = false
+                if let env = try? JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any] {
+                    if let cost = env["total_cost_usd"] as? Double { app.recordAISpend(cost) }
+                    if let text = env["result"] as? String,
+                       let s0 = text.firstIndex(of: "{"), let e0 = text.lastIndex(of: "}"),
+                       let obj = try? JSONSerialization.jsonObject(with: Data(String(text[s0...e0]).utf8)) as? [String: Any] {
+                        let verdict = obj["verdict"] as? String ?? "concerns"
+                        let notes = (obj["notes"] as? [String]) ?? []
+                        let alert = NSAlert()
+                        alert.messageText = verdict == "approve"
+                            ? "Independent review: approved"
+                            : "Independent review: concerns"
+                        alert.informativeText = notes.isEmpty ? "No notes." : notes.joined(separator: "\n")
+                        alert.addButton(withTitle: verdict == "approve" ? "Continue to Tests" : "Merge Anyway Path")
+                        alert.addButton(withTitle: "Cancel")
+                        guard alert.runModal() == .alertFirstButtonReturn else { return }
+                        reviewApproved = true
+                        runTestsThenMerge(branch: branch, testCommand: cmd)
+                        return
+                    }
+                }
+                ShellExec.notify(title: "Review failed to run", body: "Merge blocked — try again or use Refresh")
+            }
+        }
+    }
+
+    private func runTestsThenMerge(branch: String, testCommand: String) {
+        guard !testCommand.isEmpty else { performMerge(branch: branch); return }
+        gateBusy = true
+        let dir = pane.directory
+        ShellExec.notify(title: "Running tests before merge", body: testCommand)
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = ShellExec.run(["sh", "-c", testCommand], cwd: dir)
+            DispatchQueue.main.async {
+                gateBusy = false
+                if result.ok {
+                    performMerge(branch: branch)
+                } else {
+                    let alert = NSAlert()
+                    alert.messageText = "Tests failed — merge blocked"
+                    alert.informativeText = TranscriptReader.condense(
+                        result.stderr.isEmpty ? result.stdout.suffix(1000).description : result.stderr, limit: 600)
+                    alert.addButton(withTitle: "Cancel")
+                    alert.addButton(withTitle: "Merge Anyway (override)")
+                    if alert.runModal() == .alertSecondButtonReturn {
+                        performMerge(branch: branch)
+                    }
+                }
+            }
+        }
+    }
+
+    private func performMerge(branch: String) {
         let alert = NSAlert()
         alert.messageText = "Merge \(branch) into \(baseBranch)?"
         alert.informativeText = "Runs a --no-ff merge in the base checkout. Refuses if the base has uncommitted changes; aborts cleanly on conflicts. The worktree and branch are not deleted."

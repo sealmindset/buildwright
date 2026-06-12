@@ -246,6 +246,25 @@ struct SettingsView: View {
                 Text("Applies to new Claude panes. Existing panes keep the mode they started with.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section("Workspace automation (\(app.activeWorkspace?.name ?? "—"))") {
+                TextField("Test command (merge gate)", text: Binding(
+                    get: { app.activeWorkspace?.testCommand ?? "" },
+                    set: { v in if let id = app.activeWorkspace?.id { app.setTestCommand(v, forWorkspace: id) } }
+                ))
+                .font(.system(size: 11, design: .monospaced))
+                TextField("Incident probe command (5-min cadence)", text: Binding(
+                    get: { app.activeWorkspace?.incidentProbeCommand ?? "" },
+                    set: { v in
+                        if let wi = app.workspaces.firstIndex(where: { $0.id == app.activeWorkspace?.id }) {
+                            app.workspaces[wi].incidentProbeCommand = v
+                            app.persist()
+                        }
+                    }
+                ))
+                .font(.system(size: 11, design: .monospaced))
+                Text("Tests run in the worktree before every merge (red = blocked, override available). The probe's non-empty output files a P1 breakfix item with the evidence attached.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("Backlog planning") {
                 Toggle("Plan the backlog automatically at launch",
                        isOn: Binding(
