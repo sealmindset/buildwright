@@ -14,6 +14,7 @@ A native macOS terminal IDE built for running many Claude Code sessions at once 
 - **Chat panes** — a Claude thinking partner opened in your backlog board: discuss ideas, push back, file the keepers as backlog items; never touches code, always safe to run alongside anything
 - **Project isolation** — each Claude pane runs in its own folder with its own session, context, and MCP; zero cross-talk
 - **Backlog sidebar** — your `~/.claude/backlog` board rendered with filters, search, and editing; click **▶ Start** on any story to spawn a Claude pane pre-loaded with that item
+- **AI build sequence (⇧⌘P)** — headless Claude reads the whole board (design docs included) and orders the work: foundations first, then what unblocks the most, effort as tiebreaker — *not* the priority field. Every placement has a one-line reason; plan lands in `PLAN.md` and starting items in order queues them through the safety gate
 - **Shell + browser panes** — zsh panes and WKWebView browser panes mix into any layout; browsers dock left or right
 - **CVR launcher** — kick off a CVR recording session with the Chromium window auto-tiled beside the IDE
 - **iPad remote access** — attach to any workspace from Blink Shell: `mosh your-mac -- tmux attach -t docai`

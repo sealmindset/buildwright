@@ -77,6 +77,11 @@ struct BacklogSidebarView: View {
                 .foregroundStyle(.secondary)
                 .kerning(1)
             Spacer()
+            Button { app.showPlanSheet = true } label: {
+                Image(systemName: "wand.and.stars")
+            }
+            .buttonStyle(.borderless)
+            .help("AI build sequence — what to work on first and why (⇧⌘P)")
             Button { showNewEpic = true } label: {
                 Image(systemName: "plus")
             }

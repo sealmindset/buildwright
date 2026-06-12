@@ -77,6 +77,8 @@ struct BuildwrightApp: App {
                     .keyboardShortcut("k", modifiers: .command)
                 Button("Mission Control") { app.showMissionControl = true }
                     .keyboardShortcut("k", modifiers: [.command, .shift])
+                Button("Plan Backlog (AI)…") { app.showPlanSheet = true }
+                    .keyboardShortcut("p", modifiers: [.command, .shift])
             }
             CommandMenu("Focus") {
                 Button("Focus Pane Left") { app.movePaneFocus(.left) }

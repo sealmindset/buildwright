@@ -28,6 +28,9 @@ struct MainWindowView: View {
         .sheet(isPresented: $app.showTeeUpSheet) {
             TeeUpSheet()
         }
+        .sheet(isPresented: $app.showPlanSheet) {
+            BacklogPlanView(planner: app.planner)
+        }
     }
 
     private var mainArea: some View {

@@ -22,6 +22,8 @@ final class AppState: ObservableObject {
 
     let tmux = TmuxManager.shared
     let backlog = BacklogStore()
+    let planner = BacklogPlanner()
+    @Published var showPlanSheet = false
     private var statusMonitor: ClaudeStatusMonitor?
 
     var activeWorkspace: Workspace? {
@@ -76,6 +78,7 @@ final class AppState: ObservableObject {
             reconcileAll()
         }
         backlog.startWatching()
+        planner.loadSavedPlan()
         let monitor = ClaudeStatusMonitor { [weak self] statuses in
             Task { @MainActor in self?.applyStatuses(statuses) }
         }
@@ -1030,6 +1033,16 @@ final class AppState: ObservableObject {
 
     func addFeaturePane() {
         addPane(kind: .claude, title: "feature", prompt: featurePrompt)
+    }
+
+    /// Find any board item by id ("EPIC-20" or "EPIC-20-S1") — used by the
+    /// AI plan panel's start buttons.
+    func backlogItem(byID id: String) -> BacklogItem? {
+        for group in backlog.epics {
+            if group.epic.itemID == id { return group.epic }
+            if let story = group.stories.first(where: { $0.itemID == id }) { return story }
+        }
+        return nil
     }
 
     /// Close the loop: a Started pane (title == backlog item id) whose Claude
