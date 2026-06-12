@@ -11,11 +11,15 @@ final class TmuxManager {
     /// One control-mode connection per workspace session (created lazily,
     /// recreated on demand if the server restarts).
     private var controlClients: [String: TmuxControlClient] = [:]
+    /// Workspace snapshot per session so reconnects can recreate sessions
+    /// without reaching back into AppState.
+    private var workspaceBySession: [String: Workspace] = [:]
 
     /// Live control-mode connection for a workspace, creating session and
     /// connection as needed. Returns nil only when tmux is unavailable.
     func controlClient(for workspace: Workspace) -> TmuxControlClient? {
         let session = workspace.tmuxSessionName
+        workspaceBySession[session] = workspace
         if let existing = controlClients[session], existing.isAlive { return existing }
         ensureWorkspaceSession(workspace)
         let control = TmuxControlClient(sessionName: session)
@@ -27,6 +31,27 @@ final class TmuxManager {
         return control
     }
 
+    /// The connection died (server kill, crash, manual detach). Retry a few
+    /// times, then rebind surviving views or declare the panes lost.
+    private func attemptReconnect(session: String, attempt: Int = 1) {
+        guard attempt <= 3 else {
+            TerminalViewCache.shared.sessionLost(session)
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, let workspace = self.workspaceBySession[session] else { return }
+                guard self.controlClients[session]?.isAlive != true else { return } // already healed
+                guard let control = self.controlClient(for: workspace) else {
+                    self.attemptReconnect(session: session, attempt: attempt + 1)
+                    return
+                }
+                let live = Set(self.client.listWindows(session: session).map { $0.id })
+                TerminalViewCache.shared.rebindSession(session, to: control, liveWindowIDs: live)
+            }
+        }
+    }
+
     private func handleControlEvent(_ event: TmuxControlClient.Event, session: String) {
         switch event {
         case .output(let paneID, let bytes):
@@ -36,6 +61,7 @@ final class TmuxManager {
         case .exited:
             controlClients[session] = nil
             TerminalViewCache.shared.controlClientExited(session: session)
+            attemptReconnect(session: session)
         case .layoutChange(let windowID, let cols, let rows):
             TerminalViewCache.shared.tmuxResized(windowID: windowID, cols: cols, rows: rows)
         case .windowRenamed:
@@ -122,7 +148,9 @@ final class TmuxManager {
 
     /// On launch: reconcile saved panes with the live tmux server. Returns the
     /// set of pane IDs whose tmux windows are gone (process exited / killed).
-    func reconcile(workspace: Workspace) -> Set<UUID> {
+    /// nonisolated: runs N blocking CLI calls — callers keep it off the main
+    /// thread (AppState.reconcileAll does this at launch).
+    nonisolated static func computeDeadPanes(workspace: Workspace, client: TmuxClient) -> Set<UUID> {
         let session = workspace.tmuxSessionName
         guard client.hasSession(session) else {
             // Whole session gone: every terminal pane is dead. Queued panes

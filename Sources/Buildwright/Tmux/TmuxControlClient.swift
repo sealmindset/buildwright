@@ -165,6 +165,49 @@ final class TmuxControlClient {
         }
     }
 
+    /// Terminal modes the application inside the pane has enabled — must be
+    /// restored on reattach or arrow keys / mouse / alt-screen apps
+    /// misbehave until their next full redraw.
+    struct PaneModes {
+        var alternateScreen = false
+        var applicationCursorKeys = false
+        var mouseAny = false
+        var mouseButton = false
+        var mouseStandard = false
+        var mouseAll = false
+        var mouseSGR = false
+        var cursorVisible = true
+
+        /// DECSET sequences recreating these modes in a fresh terminal.
+        var restoreSequences: String {
+            var out = ""
+            if applicationCursorKeys { out += "\u{1b}[?1h" }
+            if mouseAll { out += "\u{1b}[?1003h" }
+            else if mouseButton { out += "\u{1b}[?1002h" }
+            else if mouseStandard || mouseAny { out += "\u{1b}[?1000h" }
+            if mouseSGR { out += "\u{1b}[?1006h" }
+            if !cursorVisible { out += "\u{1b}[?25l" }
+            // Bracketed paste isn't queryable in tmux formats; modern shells
+            // and Claude Code all enable it, so restore unconditionally.
+            out += "\u{1b}[?2004h"
+            return out
+        }
+    }
+
+    func paneModes(paneID: String, completion: @escaping (PaneModes?) -> Void) {
+        let fmt = "#{alternate_on} #{keypad_cursor_flag} #{mouse_any_flag} #{mouse_button_flag} #{mouse_standard_flag} #{mouse_all_flag} #{mouse_sgr_flag} #{cursor_flag}"
+        send("display-message -p -t \(paneID) \"\(fmt)\"") { result in
+            let f = result.output
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .split(separator: " ").map { $0 == "1" }
+            guard result.ok, f.count == 8 else { completion(nil); return }
+            completion(PaneModes(
+                alternateScreen: f[0], applicationCursorKeys: f[1],
+                mouseAny: f[2], mouseButton: f[3], mouseStandard: f[4],
+                mouseAll: f[5], mouseSGR: f[6], cursorVisible: f[7]))
+        }
+    }
+
     /// First (and for Buildwright, only) pane id of a window, e.g. "@3" → "%7".
     func primaryPaneID(windowID: String, completion: @escaping (String?) -> Void) {
         send("list-panes -t \(windowID) -F \"#{pane_id}\"") { result in

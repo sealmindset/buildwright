@@ -106,10 +106,27 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Launch reconcile runs N tmux CLI calls per workspace — off the main
+    /// thread (it used to beachball launch with many panes), results applied
+    /// back on the main actor.
     private func reconcileAll() {
+        let snapshot = workspaces
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let client = TmuxClient()
+            var deadByWorkspace: [UUID: Set<UUID>] = [:]
+            for ws in snapshot {
+                let dead = TmuxManager.computeDeadPanes(workspace: ws, client: client)
+                if !dead.isEmpty { deadByWorkspace[ws.id] = dead }
+            }
+            let result = deadByWorkspace
+            await MainActor.run { [weak self] in self?.applyReconcile(result) }
+        }
+    }
+
+    private func applyReconcile(_ deadByWorkspace: [UUID: Set<UUID>]) {
+        guard !deadByWorkspace.isEmpty else { return }
         for i in workspaces.indices {
-            let dead = tmux.reconcile(workspace: workspaces[i])
-            guard !dead.isEmpty else { continue }
+            guard let dead = deadByWorkspace[workspaces[i].id] else { continue }
             for t in workspaces[i].tabs.indices {
                 let deadInTab = workspaces[i].tabs[t].panes.filter { dead.contains($0.id) }.map(\.id)
                 for paneID in deadInTab {
@@ -781,6 +798,29 @@ final class AppState: ObservableObject {
     func addChatPane() {
         addPane(kind: .claude, directory: Config.backlogDirectory.path,
                 title: "chat", prompt: chatPrompt)
+    }
+
+    /// Bring a dead pane back: same kind, folder, and title, fresh tmux
+    /// window (claude restarts interactive — its session context is gone
+    /// with the process, but `claude --continue` is one keystroke away).
+    func restartPane(_ paneID: UUID) {
+        for wi in workspaces.indices {
+            let ws = workspaces[wi]
+            for ti in workspaces[wi].tabs.indices {
+                guard let pi = workspaces[wi].tabs[ti].panes.firstIndex(where: { $0.id == paneID }) else { continue }
+                var pane = workspaces[wi].tabs[ti].panes[pi]
+                guard pane.isTerminal else { return }
+                TerminalViewCache.shared.remove(paneID)
+                guard let windowID = tmux.createWindow(for: pane, in: ws) else {
+                    ShellExec.notify(title: "Buildwright", body: "Could not restart pane — is tmux running?")
+                    return
+                }
+                pane.tmuxWindowID = windowID
+                workspaces[wi].tabs[ti].panes[pi] = pane
+                persist()
+                return
+            }
+        }
     }
 
     /// Open a read-only diff pane beside a terminal pane, reviewing that

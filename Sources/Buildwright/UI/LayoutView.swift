@@ -95,6 +95,7 @@ struct DividerHandle: View {
 /// Pane chrome: a slim header (icon, title, Claude status, close) above the content.
 struct PaneContainerView: View {
     @EnvironmentObject var app: AppState
+    @ObservedObject private var termCache = TerminalViewCache.shared
     let pane: Pane
     let tab: Tab
     let workspace: Workspace
@@ -102,11 +103,19 @@ struct PaneContainerView: View {
     private var isFocused: Bool { tab.focusedPaneID == pane.id }
     private var paneStatus: PaneStatus? { app.paneStatuses[pane.shortID] }
     private var claudeStatus: ClaudeStatus { paneStatus?.state ?? .none }
+    private var runState: PaneRunState? {
+        pane.isTerminal ? termCache.runStates[pane.id] : nil
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             header
             content
+                .overlay {
+                    if let runState {
+                        PaneStateOverlay(pane: pane, state: runState)
+                    }
+                }
         }
         .background(Color(NSColor.textBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 6))
@@ -253,8 +262,50 @@ struct PaneContainerView: View {
                 TerminalPaneView(pane: pane, workspace: workspace) {
                     app.focusPane(pane.id)
                 }
+                // New tmux window (e.g. pane restart) ⇒ fresh NSView.
+                .id(pane.tmuxWindowID)
             }
         }
+    }
+}
+
+/// Overlay for a pane whose process or connection ended — actionable, and
+/// never injected into the terminal buffer (that corrupts live TUIs).
+struct PaneStateOverlay: View {
+    @EnvironmentObject var app: AppState
+    let pane: Pane
+    let state: PaneRunState
+
+    var body: some View {
+        VStack(spacing: 10) {
+            switch state {
+            case .reconnecting:
+                ProgressView().controlSize(.small)
+                Text("tmux connection dropped — reconnecting…")
+                    .font(.callout).foregroundStyle(.secondary)
+            case .exited, .lost, .running:
+                Image(systemName: "moon.zzz")
+                    .font(.system(size: 26)).foregroundStyle(.tertiary)
+                Text(state == .lost ? "tmux connection lost" : "process exited")
+                    .font(.callout).foregroundStyle(.secondary)
+                Text("Scrollback above is intact — review it, restart, or close.")
+                    .font(.caption).foregroundStyle(.tertiary)
+                HStack {
+                    Button("Restart") { app.restartPane(pane.id) }
+                        .buttonStyle(.borderedProminent).controlSize(.small)
+                    Button("Close Pane") {
+                        TerminalViewCache.shared.remove(pane.id)
+                        app.closePane(pane.id)
+                    }
+                    .controlSize(.small)
+                }
+            }
+        }
+        .padding(14)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        .padding(.bottom, 18)
+        .allowsHitTesting(true)
     }
 }
 

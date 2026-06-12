@@ -51,8 +51,7 @@ struct DiffPaneView: View {
             }
         }
         .onAppear {
-            setup()
-            refresh()
+            setup() // refresh() runs when setup's git lookups land
             // Light auto-refresh while visible — agents keep editing.
             refreshTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
                 Task { @MainActor in refresh() }
@@ -111,18 +110,20 @@ struct DiffPaneView: View {
     }
 
     private func setup() {
-        baseBranch = GitDiff.defaultBranch(repo: repoForBase)
-        currentBranch = GitDiff.currentBranch(dir: pane.directory)
-        // Worktree panes exist to be reviewed against base; default there.
-        if pane.worktreeBranch != nil || isReviewingWorktreeDir { mode = .branch }
-    }
-
-    /// The base repo whose default branch we compare against: for a worktree
-    /// directory that's still the main checkout's branches (shared .git).
-    private var repoForBase: String { pane.directory }
-
-    private var isReviewingWorktreeDir: Bool {
-        currentBranch?.hasPrefix("bw/") == true
+        // git calls off the main thread — the pane appears instantly.
+        let dir = pane.directory
+        let isWorktreePane = pane.worktreeBranch != nil
+        DispatchQueue.global(qos: .userInitiated).async {
+            let base = GitDiff.defaultBranch(repo: dir)
+            let branch = GitDiff.currentBranch(dir: dir)
+            DispatchQueue.main.async {
+                baseBranch = base
+                currentBranch = branch
+                // Worktree panes exist to be reviewed against base.
+                if isWorktreePane || branch?.hasPrefix("bw/") == true { mode = .branch }
+                refresh()
+            }
+        }
     }
 
     private func refresh() {

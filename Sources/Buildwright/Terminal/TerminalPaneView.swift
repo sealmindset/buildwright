@@ -15,6 +15,7 @@ import AppKit
 final class ControlModeTerminalView: TerminalView, TerminalViewDelegate {
     let paneID: String
     let windowID: String
+    let sessionName: String
     private(set) weak var control: TmuxControlClient?
     private var awaitingHistory = true
 
@@ -58,6 +59,7 @@ final class ControlModeTerminalView: TerminalView, TerminalViewDelegate {
     init(frame: CGRect, paneID: String, windowID: String, control: TmuxControlClient) {
         self.paneID = paneID
         self.windowID = windowID
+        self.sessionName = control.sessionName
         self.control = control
         super.init(frame: frame)
         terminalDelegate = self
@@ -65,11 +67,21 @@ final class ControlModeTerminalView: TerminalView, TerminalViewDelegate {
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
+    /// Point at a fresh control connection after a reconnect, wipe the stale
+    /// buffer, and replay from tmux's current truth.
+    func rebind(to newControl: TmuxControlClient) {
+        control = newControl
+        awaitingHistory = true
+        getTerminal().resetToInitialState()
+        TerminalViewCache.shared.startReplay(for: self)
+    }
+
     /// Reconstruct the pane the way iTerm2 does: scrollback history pushed
-    /// fully above the viewport, then the visible screen drawn row-by-row
-    /// from home, then the cursor placed where tmux says it is. Anything
-    /// less desyncs the cursor and the next TUI repaint overstrikes rows.
-    func completeReplay(history: String?, screen: String?) {
+    /// fully above the viewport, the application's terminal modes restored
+    /// (alt screen, app cursor keys, mouse — or arrows misbehave after a
+    /// reattach), then the visible screen drawn from home, then the cursor
+    /// placed where tmux says it is.
+    func completeReplay(history: String?, modes: TmuxControlClient.PaneModes?, screen: String?) {
         let t = getTerminal()
         if let history, !history.isEmpty {
             feed(text: history.replacingOccurrences(of: "\n", with: "\r\n"))
@@ -77,6 +89,11 @@ final class ControlModeTerminalView: TerminalView, TerminalViewDelegate {
             // below can't erase its tail.
             feed(text: String(repeating: "\r\n", count: t.rows))
         }
+        let modes = modes ?? TmuxControlClient.PaneModes()
+        if modes.alternateScreen {
+            feed(text: "\u{1b}[?1049h") // fresh alt screen; the capture IS its content
+        }
+        feed(text: modes.restoreSequences)
         if let screen, !screen.isEmpty {
             feed(text: "\u{1b}[H\u{1b}[2J") // home + clear viewport
             feed(text: screen.replacingOccurrences(of: "\n", with: "\r\n"))
@@ -95,10 +112,6 @@ final class ControlModeTerminalView: TerminalView, TerminalViewDelegate {
     func deliver(bytes: [UInt8]) {
         guard !awaitingHistory else { return } // contained in pending capture
         feed(byteArray: bytes[...])
-    }
-
-    func showNotice(_ message: String) {
-        feed(text: "\r\n\u{1b}[2m── \(message) ──\u{1b}[0m\r\n")
     }
 
     /// Input bypassing broadcast fan-out (used BY the fan-out).
@@ -141,9 +154,22 @@ final class ControlModeTerminalView: TerminalView, TerminalViewDelegate {
 /// Cache of live terminal views keyed by pane id. Views must survive SwiftUI
 /// view churn — tab switches, layout edits — and die only when the pane is
 /// actually closed. Also routes control-mode %output to the right view.
+/// Visible lifecycle state of a terminal pane, driving the SwiftUI overlay
+/// (never injected into the terminal buffer — that corrupts live TUIs).
+enum PaneRunState: Equatable {
+    case running
+    case exited        // tmux window closed (process ended)
+    case reconnecting  // control connection dropped; retrying
+    case lost          // reconnect failed; manual action needed
+}
+
 @MainActor
-final class TerminalViewCache {
+final class TerminalViewCache: ObservableObject {
     static let shared = TerminalViewCache()
+
+    /// Pane UUID → lifecycle state; only non-running states are stored.
+    @Published private(set) var runStates: [UUID: PaneRunState] = [:]
+
     private var views: [UUID: ControlModeTerminalView] = [:]
     private var paneIDToView: [String: UUID] = [:]   // tmux %pane-id → pane UUID
     private var windowIDToView: [String: UUID] = [:] // tmux @window-id → pane UUID
@@ -210,19 +236,28 @@ final class TerminalViewCache {
         views[pane.id] = tv
         paneIDToView[tmuxPaneID] = pane.id
         windowIDToView[windowID] = pane.id
+        runStates.removeValue(forKey: pane.id)
 
-        // Ordered on the single control connection: history → screen →
-        // cursor. Output is dropped until the screen capture lands (it's
-        // contained in the captures by protocol ordering), then streams live.
+        startReplay(for: tv)
+        return tv
+    }
+
+    /// Ordered on the single control connection: history → modes → screen →
+    /// cursor. Output is dropped until the screen capture lands (it's
+    /// contained in the captures by protocol ordering), then streams live.
+    func startReplay(for tv: ControlModeTerminalView) {
+        guard let control = tv.control else { return }
+        let tmuxPaneID = tv.paneID
         control.captureHistory(paneID: tmuxPaneID) { [weak tv, weak control] history in
-            control?.captureScreen(paneID: tmuxPaneID) { screen in
-                tv?.completeReplay(history: history, screen: screen)
-                control?.cursorPosition(paneID: tmuxPaneID) { position in
-                    if let position { tv?.placeCursor(x: position.x, y: position.y) }
+            control?.paneModes(paneID: tmuxPaneID) { modes in
+                control?.captureScreen(paneID: tmuxPaneID) { screen in
+                    tv?.completeReplay(history: history, modes: modes, screen: screen)
+                    control?.cursorPosition(paneID: tmuxPaneID) { position in
+                        if let position { tv?.placeCursor(x: position.x, y: position.y) }
+                    }
                 }
             }
         }
-        return tv
     }
 
     // MARK: Control-event routing (called by TmuxManager)
@@ -233,19 +268,40 @@ final class TerminalViewCache {
     }
 
     func windowClosed(windowID: String) {
-        guard let id = windowIDToView[windowID], let view = views[id] else { return }
-        view.showNotice("process exited")
+        guard let id = windowIDToView[windowID] else { return }
+        runStates[id] = .exited
     }
 
+    /// Connection dropped: mark this session's panes reconnecting (the
+    /// overlay shows it); TmuxManager drives the retry.
     func controlClientExited(session: String) {
-        // Server (or our connection) is gone; views go stale. AppState
-        // recreates the connection on next use; mark what we have.
-        for view in views.values where view.control == nil || view.control?.isAlive == false {
-            view.showNotice("tmux connection lost")
+        for (id, view) in views where view.sessionName == session {
+            if runStates[id] != .exited { runStates[id] = .reconnecting }
+        }
+    }
+
+    /// Reconnect succeeded: rebind surviving windows to the new connection
+    /// and replay; windows that vanished with the old server are dead.
+    func rebindSession(_ session: String, to control: TmuxControlClient, liveWindowIDs: Set<String>) {
+        for (id, view) in views where view.sessionName == session {
+            if liveWindowIDs.contains(view.windowID) {
+                runStates.removeValue(forKey: id)
+                view.rebind(to: control)
+            } else {
+                runStates[id] = .exited
+            }
+        }
+    }
+
+    /// Reconnect gave up: panes need a human.
+    func sessionLost(_ session: String) {
+        for (id, view) in views where view.sessionName == session {
+            if runStates[id] == .reconnecting { runStates[id] = .lost }
         }
     }
 
     func remove(_ paneID: UUID) {
+        runStates.removeValue(forKey: paneID)
         guard let view = views.removeValue(forKey: paneID) else { return }
         paneIDToView.removeValue(forKey: view.paneID)
         windowIDToView.removeValue(forKey: view.windowID)
