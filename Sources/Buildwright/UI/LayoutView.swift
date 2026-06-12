@@ -283,38 +283,38 @@ struct PaneStateOverlay: View {
     let state: PaneRunState
 
     var body: some View {
-        VStack(spacing: 10) {
+        HStack(spacing: 8) {
             switch state {
             case .reconnecting:
-                ProgressView().controlSize(.small)
-                Text("tmux connection dropped — reconnecting…")
-                    .font(.callout).foregroundStyle(.secondary)
+                ProgressView().controlSize(.mini)
+                Text("reconnecting…").font(.caption).foregroundStyle(.secondary)
             case .exited, .lost, .running:
-                Image(systemName: "moon.zzz")
-                    .font(.system(size: 26)).foregroundStyle(.tertiary)
-                Text(state == .lost ? "tmux connection lost" : "process exited")
-                    .font(.callout).foregroundStyle(.secondary)
-                // Only promise scrollback when there is some: a window that
-                // died before this pane was ever displayed has none.
-                Text(TerminalViewCache.shared.lastVisibleLine(for: pane.id) != nil
-                     ? "Scrollback above is intact — review it, restart, or close."
-                     : "The session ended before this pane was opened — nothing to show. Restart fresh or close.")
-                    .font(.caption).foregroundStyle(.tertiary)
-                HStack {
-                    Button("Restart") { app.restartPane(pane.id) }
-                        .buttonStyle(.borderedProminent).controlSize(.small)
-                    Button("Close Pane") {
-                        TerminalViewCache.shared.remove(pane.id)
-                        app.closePane(pane.id)
-                    }
-                    .controlSize(.small)
+                Image(systemName: "moon.zzz").font(.caption).foregroundStyle(.tertiary)
+                Text(state == .lost ? "connection lost" : "process exited")
+                    .font(.caption).foregroundStyle(.secondary)
+                // Verifies against tmux first: a live session is never
+                // touched — false alarms just clear and resync.
+                Button("Restart") { app.restartPane(pane.id) }
+                    .controlSize(.mini)
+                    .help("Checks tmux first — if the session is actually alive, this only clears the banner and resyncs the display")
+                Button("Close") {
+                    TerminalViewCache.shared.remove(pane.id)
+                    app.closePane(pane.id)
                 }
+                .controlSize(.mini)
             }
+            Button {
+                TerminalViewCache.shared.dismissState(pane.id)
+            } label: {
+                Image(systemName: "xmark").font(.system(size: 8, weight: .bold))
+            }
+            .buttonStyle(.borderless)
+            .help("Dismiss — this pane is fine")
         }
-        .padding(14)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-        .padding(.bottom, 18)
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .background(.ultraThinMaterial, in: Capsule())
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+        .padding(10)
         .allowsHitTesting(true)
     }
 }

@@ -1161,6 +1161,18 @@ final class AppState: ObservableObject {
                 guard let pi = workspaces[wi].tabs[ti].panes.firstIndex(where: { $0.id == paneID }) else { continue }
                 var pane = workspaces[wi].tabs[ti].panes[pi]
                 guard pane.isTerminal else { return }
+                // Ground truth FIRST: if the window is actually alive, the
+                // overlay was a false alarm — clear it and resync the
+                // display. NEVER recreate over a live session (that orphans
+                // the user's running work).
+                if let wid = pane.tmuxWindowID,
+                   tmux.client.listWindows(session: ws.tmuxSessionName)
+                       .contains(where: { $0.id == wid }) {
+                    TerminalViewCache.shared.dismissState(paneID)
+                    TerminalViewCache.shared.refreshPane(paneID)
+                    ShellExec.notify(title: "False alarm", body: "“\(pane.title)” is alive — display resynced, session untouched")
+                    return
+                }
                 TerminalViewCache.shared.remove(paneID)
                 // Stale status from the previous life ("done · 3h") must not
                 // carry over to the fresh process.

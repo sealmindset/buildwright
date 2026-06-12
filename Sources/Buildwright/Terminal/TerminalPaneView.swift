@@ -371,6 +371,11 @@ final class TerminalViewCache: ObservableObject {
         if runStates[paneID] == .exited { runStates.removeValue(forKey: paneID) }
     }
 
+    /// Human override: the user says this pane is fine — believe them.
+    func dismissState(_ paneID: UUID) {
+        runStates.removeValue(forKey: paneID)
+    }
+
     /// One-paste debugging: everything I need to diagnose a display issue.
     func diagnosticLines() -> [String] {
         views.map { id, view in
