@@ -28,17 +28,31 @@ final class ControlModeTerminalView: TerminalView, TerminalViewDelegate {
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    /// History (capture-pane -e) replayed into the fresh buffer; afterwards
-    /// live %output flows directly.
-    func completeReplay(history: String?) {
+    /// Reconstruct the pane the way iTerm2 does: scrollback history pushed
+    /// fully above the viewport, then the visible screen drawn row-by-row
+    /// from home, then the cursor placed where tmux says it is. Anything
+    /// less desyncs the cursor and the next TUI repaint overstrikes rows.
+    func completeReplay(history: String?, screen: String?) {
+        let t = getTerminal()
         if let history, !history.isEmpty {
             feed(text: history.replacingOccurrences(of: "\n", with: "\r\n"))
+            // Scroll history fully into scrollback so the screen redraw
+            // below can't erase its tail.
+            feed(text: String(repeating: "\r\n", count: t.rows))
+        }
+        if let screen, !screen.isEmpty {
+            feed(text: "\u{1b}[H\u{1b}[2J") // home + clear viewport
+            feed(text: screen.replacingOccurrences(of: "\n", with: "\r\n"))
         }
         awaitingHistory = false
         // Tell tmux the real size this client displays the window at —
         // full-screen apps redraw on the resulting SIGWINCH.
-        let t = getTerminal()
         control?.setWindowSize(windowID: windowID, cols: t.cols, rows: t.rows)
+    }
+
+    /// Cursor restore (arrives just after replay; zero-based from tmux).
+    func placeCursor(x: Int, y: Int) {
+        feed(text: "\u{1b}[\(y + 1);\(x + 1)H")
     }
 
     func deliver(bytes: [UInt8]) {
@@ -141,8 +155,16 @@ final class TerminalViewCache {
         paneIDToView[tmuxPaneID] = pane.id
         windowIDToView[windowID] = pane.id
 
-        control.capturePane(paneID: tmuxPaneID) { [weak tv] history in
-            tv?.completeReplay(history: history)
+        // Ordered on the single control connection: history → screen →
+        // cursor. Output is dropped until the screen capture lands (it's
+        // contained in the captures by protocol ordering), then streams live.
+        control.captureHistory(paneID: tmuxPaneID) { [weak tv, weak control] history in
+            control?.captureScreen(paneID: tmuxPaneID) { screen in
+                tv?.completeReplay(history: history, screen: screen)
+                control?.cursorPosition(paneID: tmuxPaneID) { position in
+                    if let position { tv?.placeCursor(x: position.x, y: position.y) }
+                }
+            }
         }
         return tv
     }

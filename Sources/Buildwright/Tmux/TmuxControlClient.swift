@@ -131,11 +131,34 @@ final class TmuxControlClient {
         send("refresh-client -C \(windowID):\(cols)x\(rows)")
     }
 
-    /// Scrollback + visible screen of a pane with colors, for history replay
-    /// into a fresh native buffer. Lines arrive \n-separated.
-    func capturePane(paneID: String, lines: Int = 5000, completion: @escaping (String?) -> Void) {
-        send("capture-pane -peqJ -t \(paneID) -S -\(lines)") { result in
+    /// Scrollback ABOVE the visible screen (with colors), for replay into a
+    /// fresh native buffer. -E -1 stops at the last history line.
+    func captureHistory(paneID: String, lines: Int = 5000, completion: @escaping (String?) -> Void) {
+        send("capture-pane -peqJ -t \(paneID) -S -\(lines) -E -1") { result in
             completion(result.ok ? result.output : nil)
+        }
+    }
+
+    /// The visible screen exactly as displayed: one line per row (no -J so
+    /// rows map 1:1), with colors.
+    func captureScreen(paneID: String, completion: @escaping (String?) -> Void) {
+        send("capture-pane -peq -t \(paneID)") { result in
+            completion(result.ok ? result.output : nil)
+        }
+    }
+
+    /// Where tmux believes the pane's cursor is (col, row), zero-based.
+    func cursorPosition(paneID: String, completion: @escaping ((x: Int, y: Int)?) -> Void) {
+        send("display-message -p -t \(paneID) \"#{cursor_x} #{cursor_y}\"") { result in
+            let parts = result.output
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .split(separator: " ")
+            guard result.ok, parts.count == 2,
+                  let x = Int(parts[0]), let y = Int(parts[1]) else {
+                completion(nil)
+                return
+            }
+            completion((x: x, y: y))
         }
     }
 
@@ -191,7 +214,11 @@ final class TmuxControlClient {
             let paneID = String(rest[..<space])
             let value = rest[rest.index(after: space)...]
             onEvent?(.output(paneID: paneID, bytes: Self.unescapeOctal(value)))
-        } else if line.hasPrefix("%window-close ") || line.hasPrefix("%unlinked-window-close ") {
+        } else if line.hasPrefix("%window-close ") {
+            // NOT %unlinked-window-close: that fires for windows in OTHER
+            // sessions on the server (e.g. killing legacy helper sessions
+            // that shared our windows) — treating it as a close injected
+            // "process exited" notices into live panes.
             if let id = line.split(separator: " ").last {
                 onEvent?(.windowClose(windowID: String(id)))
             }
