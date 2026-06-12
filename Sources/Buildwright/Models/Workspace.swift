@@ -40,6 +40,9 @@ struct BacklogFilters: Codable, Equatable {
     var categories: Set<String> = []    // empty = all
     var priorities: Set<String> = []    // empty = all
     var searchText: String = ""
+    /// Hide epics whose category is claimed by ANOTHER workspace. Optional
+    /// so old state decodes; nil = on (the "all" toggle turns it off).
+    var scopeToWorkspace: Bool?
 
     init() {}
 }
@@ -86,6 +89,20 @@ struct Workspace: Identifiable, Codable, Equatable {
     /// Shell command probed every 5 min; non-empty stdout files a breakfix
     /// backlog item with the output as evidence. nil/empty = off.
     var incidentProbeCommand: String?
+    /// Board category this workspace claims (sidebar scoping). nil/empty =
+    /// the workspace name, lowercased. Matches the category exactly or as a
+    /// "cat-" prefix (docai claims docai-agents).
+    var backlogCategory: String?
+
+    var effectiveBacklogCategory: String {
+        if let cat = backlogCategory, !cat.isEmpty { return cat.lowercased() }
+        return name.lowercased()
+    }
+
+    func claimsCategory(_ category: String) -> Bool {
+        let cat = effectiveBacklogCategory
+        return category == cat || category.hasPrefix(cat + "-")
+    }
 
     /// tmux session name == sanitized workspace name, so iPad attach is just
     /// `tmux attach -t <name>`. tmux forbids ':' and '.' in session names.

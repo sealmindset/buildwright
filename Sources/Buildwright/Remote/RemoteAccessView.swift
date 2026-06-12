@@ -262,7 +262,17 @@ struct SettingsView: View {
                     }
                 ))
                 .font(.system(size: 11, design: .monospaced))
-                Text("Tests run in the worktree before every merge (red = blocked, override available). The probe's non-empty output files a P1 breakfix item with the evidence attached.")
+                TextField("Backlog category (sidebar scoping)", text: Binding(
+                    get: { app.activeWorkspace?.backlogCategory ?? "" },
+                    set: { v in
+                        if let wi = app.workspaces.firstIndex(where: { $0.id == app.activeWorkspace?.id }) {
+                            app.workspaces[wi].backlogCategory = v
+                            app.persist()
+                        }
+                    }
+                ))
+                .font(.system(size: 11, design: .monospaced))
+                Text("Tests run in the worktree before every merge (red = blocked, override available). The probe's non-empty output files a P1 breakfix item with the evidence attached. Backlog category: which board category this workspace claims (empty = the workspace name); the sidebar hides other workspaces' categories unless \"all\" is checked.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Backlog planning") {

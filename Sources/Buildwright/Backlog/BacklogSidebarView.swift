@@ -37,6 +37,29 @@ struct StatusDot: View {
     }
 }
 
+/// Tiny done/total bar on epic rows — the at-a-glance progress sense.
+struct EpicProgressBar: View {
+    let done: Int
+    let total: Int
+
+    var body: some View {
+        HStack(spacing: 3) {
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(.quaternary)
+                    Capsule().fill(done == total ? Color.green : Color.blue)
+                        .frame(width: geo.size.width * CGFloat(done) / CGFloat(max(total, 1)))
+                }
+            }
+            .frame(width: 30, height: 3)
+            Text("\(done)/\(total)")
+                .font(.system(size: 8, design: .monospaced))
+                .foregroundStyle(.secondary)
+        }
+        .help("\(done) of \(total) stories done")
+    }
+}
+
 // MARK: - Sidebar
 
 struct BacklogSidebarView: View {
@@ -243,6 +266,14 @@ struct BacklogSidebarView: View {
                 }
                 Spacer()
                 Toggle(isOn: Binding(
+                    get: { !(filters.scopeToWorkspace ?? true) },
+                    set: { v in app.updateFilters { $0.scopeToWorkspace = !v } }
+                )) {
+                    Text("all").font(.system(size: 10))
+                }
+                .toggleStyle(.checkbox)
+                .help("Show every workspace's epics, not just this one's (category ↔ workspace)")
+                Toggle(isOn: Binding(
                     get: { filters.showDone },
                     set: { v in app.updateFilters { $0.showDone = v } }
                 )) {
@@ -291,7 +322,7 @@ struct BacklogSidebarView: View {
     private var list: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 2) {
-                ForEach(store.filteredEpics(filters)) { group in
+                ForEach(store.filteredEpics(filters).filter { !app.epicHiddenByScope($0.epic) }) { group in
                     epicRow(group)
                     if expandedEpics.contains(group.id) {
                         ForEach(group.filteredStories(filters)) { story in
@@ -326,6 +357,10 @@ struct BacklogSidebarView: View {
                 .lineLimit(1)
                 .foregroundStyle(group.epic.isDone ? .secondary : .primary)
             Spacer(minLength: 4)
+            if !group.epic.isDone && !group.stories.isEmpty {
+                EpicProgressBar(done: group.stories.filter(\.isDone).count,
+                                total: group.stories.count)
+            }
             PriorityBadge(priority: group.epic.priority)
         }
         .padding(.horizontal, 8).padding(.vertical, 3)

@@ -17,6 +17,7 @@ struct AppPersistedState: Codable {
     var aiSpendUSD: Double?
     var aiSpendMonth: String?
     var dismissedDrift: [String]?
+    var lastDigestDate: String?
 }
 
 /// JSON persistence in ~/Library/Application Support/Buildwright/state.json.
