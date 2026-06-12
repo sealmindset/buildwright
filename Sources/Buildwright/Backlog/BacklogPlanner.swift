@@ -15,6 +15,10 @@ struct BacklogPlan: Codable, Equatable {
         var reason: String
         var dependsOn: [String]?
         var unblocks: [String]?
+        /// Epics that must NOT run concurrently with this one — they touch
+        /// the same functionality and would oppose or collide. (Mere overlap
+        /// is fine: that's cross-checking.) Drives the epic collision gate.
+        var conflictsWith: [String]?
         var nextStories: [PlannedStory]?
     }
 
@@ -87,11 +91,22 @@ final class BacklogPlanner: ObservableObject {
     private var notifyFailure = true
 
     /// Kick off a planning run (30–90s, fully in the background).
-    func runPlan(notifyFailure: Bool = true) {
+    /// `looseEndsFor`: an epic that just completed — the planner explicitly
+    /// hunts for unfinished stories/TODOs it left behind before sequencing.
+    func runPlan(notifyFailure: Bool = true, looseEndsFor completedEpic: String? = nil) {
         if case .running = state { return } // one at a time
         self.notifyFailure = notifyFailure
         state = .running(since: Date())
-        let prompt = Self.planningPrompt
+        var prompt = Self.planningPrompt
+        if let completedEpic {
+            prompt += """
+            \n\nIMPORTANT: epic \(completedEpic) was JUST completed. Before sequencing, \
+            examine it for loose ends — stories still open under it, follow-up work named \
+            in its design doc or story notes, anything it promised but deferred. If real \
+            loose ends exist, surface them first (as nextStories of the epic that owns \
+            them, or as the top item) with reason "loose end from \(completedEpic)".
+            """
+        }
         let cwd = Config.backlogDirectory.path
         DispatchQueue.global(qos: .userInitiated).async {
             let result = ShellExec.run(
@@ -167,6 +182,9 @@ final class BacklogPlanner: ObservableObject {
             if let unblocks = epic.unblocks, !unblocks.isEmpty {
                 out += "   - unblocks: \(unblocks.joined(separator: ", "))\n"
             }
+            if let conflicts = epic.conflictsWith, !conflicts.isEmpty {
+                out += "   - must not run concurrently with: \(conflicts.joined(separator: ", "))\n"
+            }
             for story in epic.nextStories ?? [] {
                 out += "   - next: \(story.id) \(story.title) (\(story.effort)) — \(story.reason)\n"
             }
@@ -191,9 +209,15 @@ final class BacklogPlanner: ObservableObject {
 
     Effort scale: S = half a day or less, M = 1-3 days, L = a week or more.
 
+    Also identify CONFLICTS: for each epic, list epics that must not run \
+    CONCURRENTLY with it because they change the same functionality and would \
+    oppose or collide (same subsystem, same schema, same config surface). \
+    Mere topical overlap is NOT a conflict — overlapping work that cross-checks \
+    itself is healthy. Be conservative: only flag real collisions.
+
     Reply with ONLY a JSON object — no markdown fences, no commentary before or after:
     {"epics":[{"id":"EPIC-XX","title":"...","effort":"S","reason":"one line: why this position", \
-    "dependsOn":["EPIC-YY"],"unblocks":["EPIC-ZZ"], \
+    "dependsOn":["EPIC-YY"],"unblocks":["EPIC-ZZ"],"conflictsWith":["EPIC-WW"], \
     "nextStories":[{"id":"EPIC-XX-S1","title":"...","effort":"S","reason":"one line"}]}]}
     """
 

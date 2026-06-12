@@ -89,6 +89,10 @@ struct Pane: Identifiable, Codable, Equatable {
     /// On-deck panes (linear-preferred workflow): the pane this one waits
     /// for. Cleared when started. Non-nil with no tmux window = queued.
     var gatePaneID: UUID?
+    /// On-deck behind a backlog EPIC: starts when that epic's board status
+    /// goes done (collision gate — the epics would touch the same
+    /// functionality concurrently).
+    var gateEpicID: String?
     /// Prompt to launch with when the gate releases (nil = interactive).
     var queuedPrompt: String?
 
@@ -109,8 +113,8 @@ struct Pane: Identifiable, Codable, Equatable {
     /// Short id used in tmux names, env vars and status files.
     var shortID: String { String(id.uuidString.prefix(8)).lowercased() }
 
-    /// On deck: waiting for its gate pane to finish before launching.
-    var isQueued: Bool { gatePaneID != nil && tmuxWindowID == nil }
+    /// On deck: waiting for its gate (a pane or an epic) before launching.
+    var isQueued: Bool { (gatePaneID != nil || gateEpicID != nil) && tmuxWindowID == nil }
 
     /// Panes backed by a tmux window (claude/shell) — browser and diff
     /// panes are app-local.

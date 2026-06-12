@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import AppKit
+import Combine
 
 @MainActor
 final class AppState: ObservableObject {
@@ -83,6 +84,7 @@ final class AppState: ObservableObject {
         backlog.startWatching()
         planner.loadSavedPlan()
         startHealthLoop()
+        startBoardWatcher()
         // Proactive: re-plan when the board changed or the plan is stale,
         // a few seconds after launch so it never competes with reattach.
         if autoPlanOnLaunch {
@@ -633,7 +635,7 @@ final class AppState: ObservableObject {
     /// otherwise it fills the tab or splits the whole layout.
     func addPane(kind: PaneKind, axis: SplitAxis = .horizontal, directory: String? = nil,
                  title: String? = nil, prompt: String? = nil, url: String? = nil,
-                 worktree: Bool = false) {
+                 worktree: Bool = false, gateEpicID: String? = nil) {
         guard let wi = activeWorkspaceIndex else { return }
         let ws = workspaces[wi]
         guard let ti = ws.tabs.firstIndex(where: { $0.id == (ws.activeTabID ?? ws.tabs.first?.id) }) else { return }
@@ -662,11 +664,17 @@ final class AppState: ObservableObject {
         pane.worktreeBranch = worktreeBranch
         if kind == .browser { pane.browserPrivate = browserPrivateByDefault }
 
+        // Epic collision gate: the plan says this epic must not run while
+        // another (in-progress) epic touches the same functionality.
+        if kind == .claude, let gateEpicID {
+            pane.gateEpicID = gateEpicID
+            pane.queuedPrompt = prompt
+        }
         // Safety gate (linear-preferred): a Claude pane opening in a folder
         // where another Claude pane is actively working goes ON DECK instead
         // of starting — two agents must never share a working tree. The
         // placeholder offers Start Now / worktree escape hatches.
-        if kind == .claude, worktreeBranch == nil,
+        else if kind == .claude, worktreeBranch == nil,
            let gate = workingClaudePane(inDirectory: dir, of: ws) {
             pane.gatePaneID = gate.id
             pane.queuedPrompt = prompt
@@ -722,6 +730,15 @@ final class AppState: ObservableObject {
         for wi in workspaces.indices {
             for ti in workspaces[wi].tabs.indices {
                 for pane in workspaces[wi].tabs[ti].panes where pane.isQueued {
+                    if let epicGate = pane.gateEpicID {
+                        // Epic collision gate: released when the blocking
+                        // epic is done (or vanished from the board).
+                        let epic = backlog.epics.first { $0.epic.itemID == epicGate }?.epic
+                        if epic == nil || epic!.isDone {
+                            startQueuedPane(pane.id)
+                        }
+                        continue
+                    }
                     guard let gateID = pane.gatePaneID else { continue }
                     let gate = workspaces[wi].tabs.lazy
                         .flatMap(\.panes).first { $0.id == gateID }
@@ -748,6 +765,7 @@ final class AppState: ObservableObject {
                 }
                 pane.tmuxWindowID = windowID
                 pane.gatePaneID = nil
+                pane.gateEpicID = nil
                 pane.queuedPrompt = nil
                 workspaces[wi].tabs[ti].panes[pi] = pane
                 ShellExec.notify(title: "On deck pane started", body: "“\(pane.title)” in \(ws.name) is now running")
@@ -772,7 +790,8 @@ final class AppState: ObservableObject {
                 }
                 pane.directory = wt.path
                 pane.worktreeBranch = wt.branch
-                pane.gatePaneID = nil // gate no longer applies; isolated now
+                pane.gatePaneID = nil // gates no longer apply; isolated now
+                pane.gateEpicID = nil
                 workspaces[wi].tabs[ti].panes[pi] = pane
                 startQueuedPaneNow(wi: wi, ti: ti, paneID: paneID)
                 return
@@ -793,6 +812,7 @@ final class AppState: ObservableObject {
 
     /// Title of the pane an on-deck pane is waiting on (for the placeholder).
     func gateTitle(for pane: Pane) -> String? {
+        if let epicID = pane.gateEpicID { return "epic \(epicID)" }
         guard let gateID = pane.gatePaneID else { return nil }
         for ws in workspaces {
             for tab in ws.tabs {
@@ -800,6 +820,36 @@ final class AppState: ObservableObject {
             }
         }
         return nil
+    }
+
+    // MARK: Epic completion → reassess
+
+    /// Board statuses from the previous observation, for transition detection.
+    private var lastEpicStatuses: [String: String] = [:]
+    private var boardObserver: AnyCancellable?
+
+    func startBoardWatcher() {
+        boardObserver = backlog.$epics
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] groups in
+                guard let self else { return }
+                let current = Dictionary(uniqueKeysWithValues: groups.map { ($0.epic.itemID, $0.epic.status) })
+                defer { self.lastEpicStatuses = current }
+                // First observation is a baseline, not a transition.
+                guard !self.lastEpicStatuses.isEmpty else { return }
+                // Any board change can release an epic collision gate.
+                self.releaseQueuedPanes()
+                // Epic completed → reassess the plan with a loose-ends hunt.
+                for (id, status) in current
+                where (status == "done" || status == "closed")
+                    && self.lastEpicStatuses[id] != nil
+                    && self.lastEpicStatuses[id] != status {
+                    ShellExec.notify(title: "\(id) complete",
+                                     body: "Reassessing the build sequence and checking for loose ends…")
+                    self.planner.runPlan(notifyFailure: false, looseEndsFor: id)
+                    break // one re-plan covers simultaneous completions
+                }
+            }
     }
 
     // MARK: Chat pane (always parallel-safe)
@@ -1230,14 +1280,72 @@ final class AppState: ObservableObject {
 
     // MARK: Backlog → Claude
 
-    /// The killer feature: spawn a Claude pane preloaded with a backlog item.
+    /// The killer feature: spawn a Claude pane preloaded with a backlog item —
+    /// routed by the sequenced-epic policy:
+    ///  - target epic COLLIDES with an in-progress epic → on deck behind that
+    ///    epic (starts when it's marked done)
+    ///  - another epic is in progress but non-colliding, and the base folder
+    ///    is busy → isolated worktree (parallel-safe cross-checking)
+    ///  - otherwise → normal start (folder gate still applies)
     func startBacklogItem(_ item: BacklogItem) {
         let prompt = "/backlog start \(item.itemID)"
-        addPane(kind: .claude, title: item.itemID, prompt: prompt)
+        let epicID = epicID(of: item)
+        if let blocker = activeCollidingEpic(for: epicID) {
+            addPane(kind: .claude, title: item.itemID, prompt: prompt, gateEpicID: blocker)
+            ShellExec.notify(title: "\(item.itemID) on deck",
+                             body: "Collides with \(blocker) (same functionality) — starts when \(blocker) is done")
+        } else if let ws = activeWorkspace,
+                  hasActiveEpic(besides: epicID),
+                  workingClaudePane(inDirectory: ws.baseRepo, of: ws) != nil {
+            addPane(kind: .claude, title: item.itemID, prompt: prompt, worktree: true)
+        } else {
+            addPane(kind: .claude, title: item.itemID, prompt: prompt)
+        }
         if let wi = activeWorkspaceIndex {
             workspaces[wi].activeBacklogItemID = item.itemID
             persist()
         }
+    }
+
+    // MARK: Sequenced-epic policy
+
+    private func epicID(of item: BacklogItem) -> String {
+        item.isEpic ? item.itemID : (item.parent.isEmpty ? item.itemID : item.parent)
+    }
+
+    /// Epics currently in progress on the board (directly, or via a story).
+    private var activeEpicIDs: Set<String> {
+        var active = Set<String>()
+        for group in backlog.epics {
+            if group.epic.status == "in-progress" { active.insert(group.epic.itemID) }
+            if group.stories.contains(where: { $0.status == "in-progress" }) {
+                active.insert(group.epic.itemID)
+            }
+        }
+        return active
+    }
+
+    private func hasActiveEpic(besides epicID: String) -> Bool {
+        !activeEpicIDs.subtracting([epicID]).isEmpty
+    }
+
+    /// First in-progress epic the plan says must not run concurrently with
+    /// the target (checked in both directions). No plan = no collision info
+    /// (the folder gate still protects files).
+    private func activeCollidingEpic(for epicID: String) -> String? {
+        guard let plan = planner.plan else { return nil }
+        let active = activeEpicIDs.subtracting([epicID])
+        guard !active.isEmpty else { return nil }
+        for epic in plan.epics {
+            let conflicts = Set(epic.conflictsWith ?? [])
+            if epic.id == epicID, let hit = active.first(where: { conflicts.contains($0) }) {
+                return hit
+            }
+            if active.contains(epic.id), conflicts.contains(epicID) {
+                return epic.id
+            }
+        }
+        return nil
     }
 
     // MARK: Ship templates (Breakfix / Feature)

@@ -114,6 +114,11 @@ private struct PlannedEpicCard: View {
                     Label(unblocks.joined(separator: ", "), systemImage: "key")
                         .help("Unblocks")
                 }
+                if let conflicts = epic.conflictsWith, !conflicts.isEmpty {
+                    Label(conflicts.joined(separator: ", "), systemImage: "exclamationmark.octagon")
+                        .foregroundStyle(.red.opacity(0.8))
+                        .help("Must not run concurrently — starting this while one of these is in progress puts it on deck")
+                }
             }
             .font(.caption2).foregroundStyle(.tertiary)
 
