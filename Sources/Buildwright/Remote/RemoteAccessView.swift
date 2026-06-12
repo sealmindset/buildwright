@@ -206,6 +206,18 @@ struct SettingsView: View {
                     app.persist()
                 }
             }
+            Section("Chat pane prompt (backlog thinking partner)") {
+                TextEditor(text: Binding(
+                    get: { app.chatPrompt },
+                    set: { app.chatPrompt = $0; app.persist() }
+                ))
+                .font(.system(size: 11, design: .monospaced))
+                .frame(minHeight: 110)
+                Button("Reset to default") {
+                    app.chatPrompt = AppState.defaultChatPrompt
+                    app.persist()
+                }
+            }
             Section("Feature pane prompt") {
                 TextEditor(text: Binding(
                     get: { app.featurePrompt },
@@ -232,6 +244,22 @@ struct SettingsView: View {
                         set: { app.claudeSkipPermissions = $0 }
                        ))
                 Text("Applies to new Claude panes. Existing panes keep the mode they started with.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Terminal") {
+                LabeledContent("Font size") {
+                    HStack {
+                        Slider(value: Binding(
+                            get: { app.terminalFontSize },
+                            set: { app.terminalFontSize = $0 }
+                        ), in: 9...22, step: 1)
+                        .frame(width: 180)
+                        Text("\(Int(app.terminalFontSize)) pt")
+                            .font(.system(size: 11, design: .monospaced))
+                            .frame(width: 36, alignment: .trailing)
+                    }
+                }
+                Text("Applies immediately to every terminal pane.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Browser") {

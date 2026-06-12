@@ -5,6 +5,13 @@
 # Writes the pane's status where the Buildwright app and the tmux status bar
 # can read it. No-ops instantly when not running inside a Buildwright pane.
 #
+# Claude Code feeds the hook payload (JSON) on stdin; we lift out
+# transcript_path (so the app can show Claude's last message) and, for
+# Notification events, the human-readable message ("Claude needs your
+# permission to ..."). Extraction is sed-based on purpose: no jq/python
+# dependency, and a truncated detail is fine — the app falls back to the
+# transcript.
+#
 # Usage: bw-hook <working|needs-input|done>
 
 [ -n "$BUILDWRIGHT_PANE_ID" ] || exit 0
@@ -22,8 +29,14 @@ case "$STATE" in
   *)           exit 0 ;;
 esac
 
-printf '{"pane":"%s","state":"%s","title":"%s","ts":%s}\n' \
-  "$BUILDWRIGHT_PANE_ID" "$STATE" "$TITLE" "$(date +%s)" \
+INPUT=$(cat 2>/dev/null || true)
+TRANSCRIPT=$(printf '%s' "$INPUT" | sed -n 's/.*"transcript_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+# Stops at the first escaped quote (truncation is fine); strip any trailing
+# backslash so the JSON we emit below stays valid.
+DETAIL=$(printf '%s' "$INPUT" | sed -n 's/.*"message"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1 | sed 's/\\*$//')
+
+printf '{"pane":"%s","state":"%s","title":"%s","ts":%s,"detail":"%s","transcript":"%s"}\n' \
+  "$BUILDWRIGHT_PANE_ID" "$STATE" "$TITLE" "$(date +%s)" "$DETAIL" "$TRANSCRIPT" \
   > "$DIR/$BUILDWRIGHT_PANE_ID.json"
 
 printf '%s %s' "$GLYPH" "$TITLE" > "$DIR/$BUILDWRIGHT_PANE_ID.status"

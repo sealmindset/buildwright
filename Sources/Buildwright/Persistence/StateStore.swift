@@ -10,6 +10,9 @@ struct AppPersistedState: Codable {
     var claudeSkipPermissions: Bool?
     var sharedBookmarks: [Bookmark]?
     var browserPrivateByDefault: Bool?
+    var terminalFontSize: Double?
+    var layoutTemplates: [LayoutTemplate]?
+    var chatPrompt: String?
 }
 
 /// JSON persistence in ~/Library/Application Support/Buildwright/state.json.

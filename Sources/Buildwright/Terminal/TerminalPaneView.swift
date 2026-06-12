@@ -2,112 +2,192 @@ import SwiftUI
 import SwiftTerm
 import AppKit
 
-/// Terminal view that forwards trackpad/mouse-wheel scrolling to tmux.
+/// Native terminal view for ONE tmux window, fed by the workspace's
+/// control-mode connection (see TmuxControlClient). The view owns its buffer,
+/// so scrollback, trackpad scrolling, selection, copy, and Cmd+F find are all
+/// native — tmux only owns the process.
 ///
-/// SwiftTerm's default scrollWheel only moves its local scrollback, which is
-/// always empty here — tmux keeps the history server-side. When the app inside
-/// the terminal has mouse reporting on (our tmux sessions always do: `mouse on`),
-/// scrolls are forwarded as wheel events so tmux enters copy-mode and scrolls
-/// its own history. SwiftTerm's scrollWheel is public-not-open, so the
-/// forwarding is driven by a local event monitor (see TerminalViewCache) that
-/// calls handleScroll and swallows the event when it was consumed.
-final class TmuxTerminalView: LocalProcessTerminalView {
-    private var wheelAccumulator: CGFloat = 0
+/// Startup sequencing: output that arrives before the capture-pane history
+/// reply is DROPPED, not buffered. The control connection serializes events,
+/// so any %output emitted before the capture's %end is, by construction, also
+/// contained in the capture itself — dropping it avoids duplicate lines, and
+/// nothing after the %end can be missed.
+final class ControlModeTerminalView: TerminalView, TerminalViewDelegate {
+    let paneID: String
+    let windowID: String
+    private(set) weak var control: TmuxControlClient?
+    private var awaitingHistory = true
 
-    /// How many wheel events an accumulated scroll delta is worth. tmux scrolls
-    /// 5 lines per wheel event, so ~3 lines of trackpad travel per event keeps
-    /// finger distance roughly proportional to content movement.
-    static func drainWheel(accumulator: CGFloat, step: CGFloat = 3) -> (events: Int, up: Bool, remainder: CGFloat) {
-        let up = accumulator > 0
-        let events = Int(abs(accumulator) / step)
-        let remainder = accumulator - CGFloat(events) * step * (up ? 1 : -1)
-        return (events, up, remainder)
+    init(frame: CGRect, paneID: String, windowID: String, control: TmuxControlClient) {
+        self.paneID = paneID
+        self.windowID = windowID
+        self.control = control
+        super.init(frame: frame)
+        terminalDelegate = self
     }
 
-    /// Returns true when the event was forwarded to tmux (caller swallows it);
-    /// false hands it back to SwiftTerm's local scrollback behavior.
-    func handleScroll(_ event: NSEvent) -> Bool {
-        let terminal = getTerminal()
-        guard terminal.mouseMode != .off else { return false }
-        guard event.deltaY != 0 else { return false }
-        if event.hasPreciseScrollingDeltas {
-            // Trackpad (including momentum): accumulate small deltas.
-            wheelAccumulator += event.deltaY
-            let drained = Self.drainWheel(accumulator: wheelAccumulator)
-            wheelAccumulator = drained.remainder
-            for _ in 0..<drained.events { sendWheel(up: drained.up, event: event) }
-        } else {
-            // Physical mouse wheel: one event per click, no dead zone.
-            sendWheel(up: event.deltaY > 0, event: event)
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    /// History (capture-pane -e) replayed into the fresh buffer; afterwards
+    /// live %output flows directly.
+    func completeReplay(history: String?) {
+        if let history, !history.isEmpty {
+            feed(text: history.replacingOccurrences(of: "\n", with: "\r\n"))
+        }
+        awaitingHistory = false
+        // Tell tmux the real size this client displays the window at —
+        // full-screen apps redraw on the resulting SIGWINCH.
+        let t = getTerminal()
+        control?.setWindowSize(windowID: windowID, cols: t.cols, rows: t.rows)
+    }
+
+    func deliver(bytes: [UInt8]) {
+        guard !awaitingHistory else { return } // contained in pending capture
+        feed(byteArray: bytes[...])
+    }
+
+    func showNotice(_ message: String) {
+        feed(text: "\r\n\u{1b}[2m── \(message) ──\u{1b}[0m\r\n")
+    }
+
+    /// Input bypassing broadcast fan-out (used BY the fan-out).
+    func sendDirectly(bytes: [UInt8]) {
+        control?.sendKeys(paneID: paneID, bytes: bytes)
+    }
+
+    // MARK: TerminalViewDelegate
+
+    func send(source: TerminalView, data: ArraySlice<UInt8>) {
+        let bytes = Array(data)
+        if TerminalViewCache.shared.broadcast(from: self, bytes: bytes) { return }
+        control?.sendKeys(paneID: paneID, bytes: bytes)
+    }
+
+    func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
+        control?.setWindowSize(windowID: windowID, cols: newCols, rows: newRows)
+    }
+
+    func setTerminalTitle(source: TerminalView, title: String) {}
+    func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
+    func scrolled(source: TerminalView, position: Double) {}
+    func bell(source: TerminalView) { NSSound.beep() }
+    func iTermContent(source: TerminalView, content: ArraySlice<UInt8>) {}
+    func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
+
+    func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
+        if let url = URL(string: link) { NSWorkspace.shared.open(url) }
+    }
+
+    func clipboardCopy(source: TerminalView, content: Data) {
+        if let str = String(data: content, encoding: .utf8) {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(str, forType: .string)
+        }
+    }
+}
+
+/// Cache of live terminal views keyed by pane id. Views must survive SwiftUI
+/// view churn — tab switches, layout edits — and die only when the pane is
+/// actually closed. Also routes control-mode %output to the right view.
+@MainActor
+final class TerminalViewCache {
+    static let shared = TerminalViewCache()
+    private var views: [UUID: ControlModeTerminalView] = [:]
+    private var paneIDToView: [String: UUID] = [:]   // tmux %pane-id → pane UUID
+    private var windowIDToView: [String: UUID] = [:] // tmux @window-id → pane UUID
+
+    /// Current terminal font size; applied to existing views on change.
+    private var fontSize: CGFloat = 13
+
+    /// Pane UUIDs receiving mirrored input while broadcast mode is armed
+    /// (managed by AppState; empty = off).
+    var broadcastTargets: Set<UUID> = []
+
+    func applyFontSize(_ size: CGFloat) {
+        fontSize = size
+        for view in views.values {
+            view.font = NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+        }
+    }
+
+    /// Fan input out to every broadcast target (source included). Returns
+    /// false when broadcast is off or the source isn't armed — caller sends
+    /// normally.
+    func broadcast(from source: ControlModeTerminalView, bytes: [UInt8]) -> Bool {
+        guard !broadcastTargets.isEmpty,
+              let sourceUUID = paneIDToView[source.paneID],
+              broadcastTargets.contains(sourceUUID) else { return false }
+        for id in broadcastTargets {
+            views[id]?.sendDirectly(bytes: bytes)
         }
         return true
     }
 
-    private func sendWheel(up: Bool, event: NSEvent) {
-        let terminal = getTerminal()
-        let flags = terminal.encodeButton(
-            button: up ? 4 : 5, release: false,
-            shift: event.modifierFlags.contains(.shift),
-            meta: event.modifierFlags.contains(.option),
-            control: event.modifierFlags.contains(.control))
-        let point = convert(event.locationInWindow, from: nil)
-        let col = max(0, min(terminal.cols - 1, Int(point.x / max(1, bounds.width) * CGFloat(terminal.cols))))
-        let row = max(0, min(terminal.rows - 1, Int((bounds.height - point.y) / max(1, bounds.height) * CGFloat(terminal.rows))))
-        terminal.sendEvent(buttonFlags: flags, x: col, y: row)
-    }
-}
+    private init() {}
 
-/// Cache of live terminal views keyed by pane id. Terminal views (and their
-/// attached tmux client processes) must survive SwiftUI view churn — tab
-/// switches, layout edits — and die only when the pane is actually closed.
-@MainActor
-final class TerminalViewCache {
-    static let shared = TerminalViewCache()
-    private var views: [UUID: LocalProcessTerminalView] = [:]
-
-    private init() {
-        // Route scroll events over a terminal to tmux (SwiftTerm's own
-        // scrollWheel can't be overridden — it's public, not open).
-        NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
-            guard let contentView = event.window?.contentView,
-                  let hit = contentView.hitTest(event.locationInWindow) else { return event }
-            var view: NSView? = hit
-            while let v = view, !(v is TmuxTerminalView) { view = v.superview }
-            guard let tv = view as? TmuxTerminalView else { return event }
-            return tv.handleScroll(event) ? nil : event
-        }
-    }
-
-    func view(for pane: Pane, in workspace: Workspace) -> LocalProcessTerminalView? {
+    func view(for pane: Pane, in workspace: Workspace) -> ControlModeTerminalView? {
         if let existing = views[pane.id] { return existing }
-        guard let argv = TmuxManager.shared.attachCommand(for: pane, in: workspace) else { return nil }
+        guard let windowID = pane.tmuxWindowID,
+              let control = TmuxManager.shared.controlClient(for: workspace),
+              let tmuxPaneID = TmuxManager.shared.client.primaryPaneID(windowID: windowID)
+        else { return nil }
 
-        let tv = TmuxTerminalView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
-        tv.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let tv = ControlModeTerminalView(
+            frame: NSRect(x: 0, y: 0, width: 400, height: 300),
+            paneID: tmuxPaneID, windowID: windowID, control: control)
+        tv.font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
 
-        var env = ProcessInfo.processInfo.environment
-        env["TERM"] = "xterm-256color"
-        env["COLORTERM"] = "truecolor"
-        env["LANG"] = env["LANG"] ?? "en_US.UTF-8"
-        let extraPaths = "/opt/homebrew/bin:/usr/local/bin:\(Config.home.path)/.local/bin"
-        env["PATH"] = "\(env["PATH"] ?? "/usr/bin:/bin"):\(extraPaths)"
-        let envArray = env.map { "\($0.key)=\($0.value)" }
-
-        tv.startProcess(
-            executable: "/usr/bin/env",
-            args: argv,
-            environment: envArray,
-            execName: nil
-        )
         views[pane.id] = tv
+        paneIDToView[tmuxPaneID] = pane.id
+        windowIDToView[windowID] = pane.id
+
+        control.capturePane(paneID: tmuxPaneID) { [weak tv] history in
+            tv?.completeReplay(history: history)
+        }
         return tv
     }
 
+    // MARK: Control-event routing (called by TmuxManager)
+
+    func deliver(paneID: String, bytes: [UInt8]) {
+        guard let id = paneIDToView[paneID], let view = views[id] else { return }
+        view.deliver(bytes: bytes)
+    }
+
+    func windowClosed(windowID: String) {
+        guard let id = windowIDToView[windowID], let view = views[id] else { return }
+        view.showNotice("process exited")
+    }
+
+    func controlClientExited(session: String) {
+        // Server (or our connection) is gone; views go stale. AppState
+        // recreates the connection on next use; mark what we have.
+        for view in views.values where view.control == nil || view.control?.isAlive == false {
+            view.showNotice("tmux connection lost")
+        }
+    }
+
     func remove(_ paneID: UUID) {
-        views.removeValue(forKey: paneID)
+        guard let view = views.removeValue(forKey: paneID) else { return }
+        paneIDToView.removeValue(forKey: view.paneID)
+        windowIDToView.removeValue(forKey: view.windowID)
     }
 
     func contains(_ paneID: UUID) -> Bool { views[paneID] != nil }
+
+    /// Bottom-most non-empty line currently visible in a pane — mission
+    /// control's fallback when there's no transcript detail to show.
+    func lastVisibleLine(for paneID: UUID) -> String? {
+        guard let view = views[paneID] else { return nil }
+        let terminal = view.getTerminal()
+        for row in stride(from: terminal.rows - 1, through: 0, by: -1) {
+            guard let line = terminal.getLine(row: row) else { continue }
+            let text = line.translateToString(trimRight: true)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !text.isEmpty { return text }
+        }
+        return nil
+    }
 }
 
 /// SwiftUI wrapper hosting the cached terminal view for a pane.
@@ -144,7 +224,7 @@ final class FocusReportingView: NSView {
     override func mouseDown(with event: NSEvent) {
         onFocus?()
         // Hand focus to the terminal subview.
-        if let tv = subviews.first(where: { $0 is LocalProcessTerminalView }) {
+        if let tv = subviews.first(where: { $0 is TerminalView }) {
             window?.makeFirstResponder(tv)
         }
         super.mouseDown(with: event)

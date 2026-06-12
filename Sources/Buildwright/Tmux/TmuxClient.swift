@@ -54,9 +54,17 @@ struct TmuxClient {
         }
     }
 
-    /// Kill Buildwright helper sessions (`_bw-*`) that have no attached client.
-    /// Replaces destroy-unattached (see note in ensureGroupedSession). Safe to
-    /// call any time: never touches workspace sessions or attached helpers.
+    /// First pane id (e.g. "%7") of a window. Buildwright windows hold exactly
+    /// one tmux pane — splits are app-side layout, each its own window.
+    func primaryPaneID(windowID: String) -> String? {
+        let result = run(["list-panes", "-t", windowID, "-F", "#{pane_id}"])
+        guard result.ok else { return nil }
+        return result.stdout.split(separator: "\n").first.map(String.init)
+    }
+
+    /// LEGACY migration: kill leftover `_bw-*` display sessions created by the
+    /// pre-control-mode design (hidden grouped sessions per pane). Newer
+    /// builds never create them; this only sweeps up after old versions.
     func cleanupStaleGroupedSessions() {
         for (name, attached) in listSessionsWithAttachCounts()
         where name.hasPrefix(Config.groupedSessionPrefix) && attached == 0 {
@@ -105,43 +113,12 @@ struct TmuxClient {
         run(["rename-window", "-t", id, name])
     }
 
-    // MARK: Grouped display sessions
-
-    /// Name of the hidden grouped session the app uses to display one window
-    /// independently (multiple tmux clients on ONE session share the active
-    /// window; grouped sessions share windows but keep independent focus).
-    static func groupedSessionName(workspaceSession: String, paneShortID: String) -> String {
-        "\(Config.groupedSessionPrefix)\(workspaceSession)-\(paneShortID)"
-    }
-
-    /// Ensure a grouped session exists targeting `windowID`, returning its name.
-    func ensureGroupedSession(workspaceSession: String, paneShortID: String, windowID: String) -> String {
-        let name = TmuxClient.groupedSessionName(workspaceSession: workspaceSession, paneShortID: paneShortID)
-        if !hasSession(name) {
-            run(["new-session", "-d", "-s", name, "-t", "=\(workspaceSession)"])
-            if !hasSession(name) {
-                // One retry — first creation can race server startup.
-                run(["new-session", "-d", "-s", name, "-t", "=\(workspaceSession)"])
-            }
-            // Helper sessions: no status bar (the app draws its own chrome).
-            // NOTE: set-option targets use the "name:" form — tmux 3.6 rejects
-            // the "=name" exact-match prefix for set-option specifically.
-            // NOTE: destroy-unattached must NOT be used here — tmux reaps a
-            // detached session with that option set IMMEDIATELY, before the
-            // terminal pane ever attaches ("can't find session" on open).
-            // Stale helpers are cleaned up explicitly at app launch and quit.
-            run(["set-option", "-t", "\(name):", "status", "off"])
-        }
-        run(["select-window", "-t", "\(name):\(windowID)"])
-        return name
-    }
-
     // MARK: Options
 
     /// Mobile/iPad-friendly defaults applied per workspace session (not
     /// globally, so the user's own tmux setup is untouched).
     func applyMobileDefaults(session: String) {
-        let t = "\(session):" // see note in ensureGroupedSession re: set-option targets
+        let t = "\(session):" // set-option needs "name:" form, not "=name"
         run(["set-option", "-t", t, "history-limit", "30000"])
         run(["set-option", "-t", t, "mouse", "on"])
         run(["set-option", "-t", t, "window-size", "latest"])
@@ -154,7 +131,7 @@ struct TmuxClient {
     /// Show Claude status in the tmux status bar so the iPad sees the same
     /// at-a-glance info as the Mac app. Reads bw-hook status files.
     func applyStatusBar(session: String, statusDir: String) {
-        let t = "\(session):" // see note in ensureGroupedSession re: set-option targets
+        let t = "\(session):" // set-option needs "name:" form, not "=name"
         let script = "for f in \(statusDir)/*.status; do [ -e \"$f\" ] || continue; cat \"$f\"; printf ' '; done"
         run(["set-option", "-t", t, "status-interval", "5"])
         run(["set-option", "-t", t, "status-right-length", "80"])

@@ -22,6 +22,12 @@ struct MainWindowView: View {
         .sheet(isPresented: $app.showPalette) {
             CommandPaletteView()
         }
+        .sheet(isPresented: $app.showMissionControl) {
+            MissionControlView()
+        }
+        .sheet(isPresented: $app.showTeeUpSheet) {
+            TeeUpSheet()
+        }
     }
 
     private var mainArea: some View {
@@ -32,7 +38,12 @@ struct MainWindowView: View {
                 ReentryStrip(notice: notice)
             }
             if let ws = app.activeWorkspace, let tab = ws.activeTab, let layout = tab.layout {
-                LayoutView(node: layout, tab: tab, workspace: ws, path: [])
+                // Zoom: render just the zoomed pane instead of the split tree.
+                let node: LayoutNode = {
+                    if let z = app.zoomedPaneID, layout.contains(z) { return .pane(z) }
+                    return layout
+                }()
+                LayoutView(node: node, tab: tab, workspace: ws, path: [])
                     .padding(3)
                     .background(Color(NSColor.windowBackgroundColor))
             } else {
@@ -60,12 +71,37 @@ struct MainWindowView: View {
 
             Spacer()
 
+            if app.broadcastMode {
+                Button { app.toggleBroadcast() } label: {
+                    Label("BROADCAST", systemImage: "dot.radiowaves.left.and.right")
+                        .font(.system(size: 9, weight: .bold))
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.white)
+                .padding(.horizontal, 6).padding(.vertical, 2)
+                .background(Color.red, in: Capsule())
+                .help("Keystrokes go to EVERY terminal pane in this tab — click to disarm (⌃⌘B)")
+            }
+            if app.zoomedPaneID != nil {
+                Button { app.toggleZoom() } label: {
+                    Label("zoomed", systemImage: "arrow.down.right.and.arrow.up.left")
+                        .font(.system(size: 9, weight: .medium))
+                }
+                .buttonStyle(.borderless)
+                .padding(.horizontal, 6).padding(.vertical, 2)
+                .background(Color.blue.opacity(0.15), in: Capsule())
+                .help("Pane is zoomed — click to restore the split layout (⌘↩)")
+            }
+
             Menu {
                 Button("Claude pane — split right  ⌘N") { app.addPane(kind: .claude, axis: .horizontal) }
                 Button("Claude pane — split down") { app.addPane(kind: .claude, axis: .vertical) }
                 Divider()
                 Button("🔧 Breakfix pane (guarded fix workflow)") { app.addBreakfixPane() }
                 Button("✨ Feature pane (guarded feature workflow)") { app.addFeaturePane() }
+                Divider()
+                Button("⏭ Tee up next…  ⌥⌘T") { app.showTeeUpSheet = true }
+                Button("💬 Chat pane (backlog ideas)") { app.addChatPane() }
                 Divider()
                 Button("Shell pane — split right  ⌘D") { app.addPane(kind: .shell, axis: .horizontal) }
                 Button("Shell pane — split down  ⇧⌘D") { app.addPane(kind: .shell, axis: .vertical) }

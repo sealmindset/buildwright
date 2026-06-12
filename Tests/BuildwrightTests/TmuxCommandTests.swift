@@ -8,12 +8,14 @@ struct TmuxCommandTests {
         #expect(TmuxClient.command(["list-sessions"]) == ["tmux", "list-sessions"])
     }
 
-    @Test func groupedSessionNaming() {
-        let name = TmuxClient.groupedSessionName(workspaceSession: "docai", paneShortID: "ab12cd34")
-        #expect(name == "_bw-docai-ab12cd34")
-        #expect(name.hasPrefix(Config.groupedSessionPrefix), "bw CLI filters on this prefix")
-        #expect(!name.contains(":"), "tmux session names cannot contain ':'")
-        #expect(!name.contains("."), "tmux session names cannot contain '.'")
+    @Test func controlModeOutputUnescaping() {
+        // tmux %output escapes non-printables and backslash as octal \ooo.
+        #expect(TmuxControlClient.unescapeOctal("hello") == Array("hello".utf8))
+        #expect(TmuxControlClient.unescapeOctal("\\033[1m") == [0x1B, 0x5B, 0x31, 0x6D])
+        #expect(TmuxControlClient.unescapeOctal("a\\134b") == Array("a\\b".utf8))
+        #expect(TmuxControlClient.unescapeOctal("\\015\\012") == [0x0D, 0x0A])
+        // Trailing lone backslash must not crash or be swallowed.
+        #expect(TmuxControlClient.unescapeOctal("x\\") == Array("x\\".utf8))
     }
 
     @Test func workspaceSessionNameSanitization() {

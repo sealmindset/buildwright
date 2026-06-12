@@ -8,6 +8,39 @@ final class TmuxManager {
     static let shared = TmuxManager()
     let client = TmuxClient()
 
+    /// One control-mode connection per workspace session (created lazily,
+    /// recreated on demand if the server restarts).
+    private var controlClients: [String: TmuxControlClient] = [:]
+
+    /// Live control-mode connection for a workspace, creating session and
+    /// connection as needed. Returns nil only when tmux is unavailable.
+    func controlClient(for workspace: Workspace) -> TmuxControlClient? {
+        let session = workspace.tmuxSessionName
+        if let existing = controlClients[session], existing.isAlive { return existing }
+        ensureWorkspaceSession(workspace)
+        let control = TmuxControlClient(sessionName: session)
+        control.onEvent = { [weak self] event in
+            self?.handleControlEvent(event, session: session)
+        }
+        guard control.connect() else { return nil }
+        controlClients[session] = control
+        return control
+    }
+
+    private func handleControlEvent(_ event: TmuxControlClient.Event, session: String) {
+        switch event {
+        case .output(let paneID, let bytes):
+            TerminalViewCache.shared.deliver(paneID: paneID, bytes: bytes)
+        case .windowClose(let windowID):
+            TerminalViewCache.shared.windowClosed(windowID: windowID)
+        case .exited:
+            controlClients[session] = nil
+            TerminalViewCache.shared.controlClientExited(session: session)
+        case .windowRenamed, .layoutChange:
+            break
+        }
+    }
+
     /// Launch claude with --dangerously-skip-permissions (no approval prompts).
     /// On by default — Buildwright is a trusted single-user environment.
     /// Toggleable in Settings → General.
@@ -75,11 +108,6 @@ final class TmuxManager {
     func destroyWindow(for pane: Pane, in workspace: Workspace) {
         guard let windowID = pane.tmuxWindowID else { return }
         client.killWindow(id: windowID)
-        let grouped = TmuxClient.groupedSessionName(
-            workspaceSession: workspace.tmuxSessionName, paneShortID: pane.shortID)
-        if client.hasSession(grouped) {
-            client.killSession(name: grouped)
-        }
         // Clean up the status file so stale state never lingers.
         let statusFile = Config.claudeStatusDirectory
             .appendingPathComponent("\(pane.shortID).status")
@@ -88,31 +116,16 @@ final class TmuxManager {
             at: Config.claudeStatusDirectory.appendingPathComponent("\(pane.shortID).json"))
     }
 
-    /// The argv the terminal view runs to DISPLAY a pane: attach to a hidden
-    /// grouped session focused on this pane's window.
-    func attachCommand(for pane: Pane, in workspace: Workspace) -> [String]? {
-        guard let windowID = pane.tmuxWindowID else { return nil }
-        // Self-healing: if the workspace session is gone (server restart,
-        // manual kill), grouping against it would create a stray session
-        // with a literal "=name" group. Recreate the session first.
-        ensureWorkspaceSession(workspace)
-        let grouped = client.ensureGroupedSession(
-            workspaceSession: workspace.tmuxSessionName,
-            paneShortID: pane.shortID,
-            windowID: windowID
-        )
-        return ["tmux", "attach-session", "-t", "=\(grouped)"]
-    }
-
     /// On launch: reconcile saved panes with the live tmux server. Returns the
     /// set of pane IDs whose tmux windows are gone (process exited / killed).
     func reconcile(workspace: Workspace) -> Set<UUID> {
         let session = workspace.tmuxSessionName
         guard client.hasSession(session) else {
-            // Whole session gone: every terminal pane is dead.
+            // Whole session gone: every terminal pane is dead. Queued panes
+            // have no window yet by design — they are not dead.
             var dead = Set<UUID>()
             for tab in workspace.tabs {
-                for pane in tab.panes where pane.kind != .browser {
+                for pane in tab.panes where pane.kind != .browser && !pane.isQueued {
                     dead.insert(pane.id)
                 }
             }
@@ -123,7 +136,7 @@ final class TmuxManager {
         let liveWindowIDs = Set(client.listWindows(session: session).map { $0.id })
         var dead = Set<UUID>()
         for tab in workspace.tabs {
-            for pane in tab.panes where pane.kind != .browser {
+            for pane in tab.panes where pane.kind != .browser && !pane.isQueued {
                 if let wid = pane.tmuxWindowID, liveWindowIDs.contains(wid) { continue }
                 dead.insert(pane.id)
             }

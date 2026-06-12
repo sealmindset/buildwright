@@ -7,6 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // window comes to the front with a dock icon.
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+        GlobalHotkey.register() // ⌥⌘B anywhere → summon + Mission Control
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -14,9 +15,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        // Our attach clients die with the app, leaving helper sessions
-        // unattached — remove them. Workspace sessions are untouched and
-        // keep running (that's the whole point).
+        // Legacy sweep: pre-control-mode builds left hidden `_bw-` helper
+        // sessions behind. Workspace sessions are untouched and keep
+        // running (that's the whole point).
         TmuxClient().cleanupStaleGroupedSessions()
     }
 }
@@ -38,6 +39,11 @@ struct BuildwrightApp: App {
                     .keyboardShortcut("n", modifiers: .command)
                 Button("New Claude Pane (split down)") { app.addPane(kind: .claude, axis: .vertical) }
                     .keyboardShortcut("n", modifiers: [.command, .shift])
+                Button("New Claude Pane (isolated worktree)") { app.addPane(kind: .claude, worktree: true) }
+                    .keyboardShortcut("n", modifiers: [.command, .control])
+                Button("Tee Up Next…") { app.showTeeUpSheet = true }
+                    .keyboardShortcut("t", modifiers: [.command, .option])
+                Button("New Chat Pane (backlog ideas)") { app.addChatPane() }
                 Divider()
                 Button("New Shell Pane (split right)") { app.addPane(kind: .shell, axis: .horizontal) }
                     .keyboardShortcut("d", modifiers: .command)
@@ -56,12 +62,21 @@ struct BuildwrightApp: App {
                     }
                 }
                 .keyboardShortcut("w", modifiers: .command)
+                Divider()
+                Button("Zoom Focused Pane") { app.toggleZoom() }
+                    .keyboardShortcut(.return, modifiers: .command)
+                Button(app.broadcastMode ? "Disarm Broadcast Input" : "Broadcast Input to Tab") {
+                    app.toggleBroadcast()
+                }
+                .keyboardShortcut("b", modifiers: [.command, .control])
             }
             CommandMenu("Attention") {
                 Button("Jump to Next Needing You") { app.jumpToNextAttention() }
                     .keyboardShortcut("j", modifiers: .command)
                 Button("Command Palette…") { app.showPalette = true }
                     .keyboardShortcut("k", modifiers: .command)
+                Button("Mission Control") { app.showMissionControl = true }
+                    .keyboardShortcut("k", modifiers: [.command, .shift])
             }
             CommandMenu("Focus") {
                 Button("Focus Pane Left") { app.movePaneFocus(.left) }
@@ -82,6 +97,16 @@ struct BuildwrightApp: App {
                     }
                 }
                 .keyboardShortcut("w", modifiers: [.command, .shift])
+                Divider()
+                Button("Save Tab Layout as Template…") { app.promptSaveTemplate() }
+                Menu("New Tab from Template") {
+                    ForEach(app.layoutTemplates) { template in
+                        Button(template.name) { app.newTab(fromTemplate: template) }
+                    }
+                    if app.layoutTemplates.isEmpty {
+                        Text("No templates saved yet")
+                    }
+                }
                 Divider()
                 Button("New Workspace…") { app.showNewWorkspaceSheet = true }
                     .keyboardShortcut("n", modifiers: [.command, .option])

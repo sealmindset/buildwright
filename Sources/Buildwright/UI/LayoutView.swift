@@ -144,6 +144,23 @@ struct PaneContainerView: View {
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(isFocused ? .primary : .secondary)
                 .lineLimit(1)
+            if let branch = pane.worktreeBranch {
+                Text("⎇ \(branch)")
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(.purple)
+                    .padding(.horizontal, 4).padding(.vertical, 1)
+                    .background(Color.purple.opacity(0.12))
+                    .clipShape(Capsule())
+                    .help("Isolated git worktree — removed on close if clean, branch kept")
+            }
+            if pane.isQueued {
+                Text("on deck")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(Color.secondary.opacity(0.12))
+                    .clipShape(Capsule())
+            }
             if pane.kind == .claude && claudeStatus != .none {
                 HStack(spacing: 3) {
                     Circle().fill(statusColor).frame(width: 6, height: 6)
@@ -217,9 +234,53 @@ struct PaneContainerView: View {
         case .browser:
             BrowserPaneView(pane: pane)
         case .claude, .shell:
-            TerminalPaneView(pane: pane, workspace: workspace) {
-                app.focusPane(pane.id)
+            if pane.isQueued {
+                QueuedPaneView(pane: pane)
+            } else {
+                TerminalPaneView(pane: pane, workspace: workspace) {
+                    app.focusPane(pane.id)
+                }
             }
         }
+    }
+}
+
+/// Placeholder for an on-deck pane: shows what it's waiting for, the teed-up
+/// prompt, and the two escape hatches (start now / isolate in a worktree).
+struct QueuedPaneView: View {
+    @EnvironmentObject var app: AppState
+    let pane: Pane
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "hourglass")
+                .font(.system(size: 28))
+                .foregroundStyle(.tertiary)
+            if let gate = app.gateTitle(for: pane) {
+                Text("On deck — starts when “\(gate)” finishes")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("On deck")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            if let prompt = pane.queuedPrompt, !prompt.isEmpty {
+                Text(TranscriptReader.condense(prompt, limit: 200))
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+            }
+            HStack {
+                Button("Start Now") { app.startQueuedPane(pane.id) }
+                Button("Run in Worktree Instead") { app.startQueuedPaneInWorktree(pane.id) }
+                    .help("Isolated checkout + branch — safe to run alongside the working pane")
+            }
+            .controlSize(.small)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(NSColor.windowBackgroundColor).opacity(0.6))
+        .onTapGesture { app.focusPane(pane.id) }
     }
 }

@@ -6,7 +6,12 @@ A native macOS terminal IDE built for running many Claude Code sessions at once 
 
 - **Tiling panes, any arrangement** — split into rows, columns, or any nested combination; add, delete, and drag-resize freely
 - **Real tmux under the hood** — every workspace is one tmux session, every pane a window inside it; sessions survive app crashes, restarts, and reboots
-- **Built for Claude Code** — each pane shows whether Claude is working (●), needs you (◉), or done (✓); unfocused sessions ping you with a macOS notification
+- **Native terminal feel** — panes render into native SwiftTerm buffers via tmux *control mode* (the iTerm2 integration model): trackpad scrollback, text selection, copy, and Cmd+F find all behave like Terminal.app
+- **Built for Claude Code** — each pane shows whether Claude is working (●), needs you (◉), or done (✓); unfocused sessions ping you with a macOS notification that says *what* Claude needs (read from the session transcript)
+- **Mission Control** — ⇧⌘K (or ⌥⌘B from anywhere in macOS): every pane in every workspace as one glanceable grid — status, wait time, Claude's last message; click to jump
+- **Worktree isolation** — spawn a Claude pane in its own git worktree + branch (⌃⌘N) so parallel agents never trample each other; clean worktrees auto-remove on close, branches kept
+- **Linear-preferred safety gate** — a new Claude pane in a folder where another is working goes *on deck* automatically and starts when the first finishes (⌥⌘T to tee up the next prompt while the current one runs); escape hatches: start now, or run isolated in a worktree
+- **Chat panes** — a Claude thinking partner opened in your backlog board: discuss ideas, push back, file the keepers as backlog items; never touches code, always safe to run alongside anything
 - **Project isolation** — each Claude pane runs in its own folder with its own session, context, and MCP; zero cross-talk
 - **Backlog sidebar** — your `~/.claude/backlog` board rendered with filters, search, and editing; click **▶ Start** on any story to spawn a Claude pane pre-loaded with that item
 - **Shell + browser panes** — zsh panes and WKWebView browser panes mix into any layout; browsers dock left or right
@@ -63,12 +68,18 @@ On first launch, Buildwright:
 | ⌘W | Close focused pane |
 | ⌘J | Jump to the pane that's been waiting on you longest |
 | ⌘K | Command palette — jump to any pane, workspace, backlog item, or action |
+| ⇧⌘K | Mission Control — every pane in every workspace, one grid |
+| ⌥⌘B | Summon Buildwright + Mission Control from anywhere in macOS |
+| ⌘↩ | Zoom focused pane (toggle) |
+| ⌃⌘B | Broadcast input to every terminal pane in the tab (toggle, auto-disarms on tab switch) |
+| ⌃⌘N | New Claude pane in an isolated git worktree |
+| ⌥⌘T | Tee up the next prompt — queues behind the working pane, auto-starts when it finishes |
 | ⌥⌘←↑↓→ | Move pane focus spatially |
 | ⌘⌥1-9 | Switch workspace by position |
 | ⌘T / ⇧⌘W | New tab / close tab |
 | ⌘1 | Toggle backlog sidebar |
 | ⌥⌘N | New workspace |
-| Ctrl+B … | Classic tmux prefix still works inside any pane |
+| Ctrl+B … | tmux prefix works when attached from another terminal (iPad/Blink); inside app panes keys go straight to your program |
 
 ## How the tmux Mapping Works
 
@@ -82,7 +93,7 @@ Buildwright window                     tmux server (survives everything)
 └─────────┴────────────────────┘
 ```
 
-Each visible pane attaches through a hidden *grouped session* (`_bw-…`, auto-cleaning) so every pane can focus a different window of the same session. From any terminal — including Blink on iPad — the workspace is directly reachable:
+The app holds one tmux *control mode* connection (`tmux -C`, the protocol behind iTerm2's tmux integration) per workspace. Pane output streams to the app as `%output` events and renders into native SwiftTerm buffers — so scrollback, selection, and search are local and native — while keystrokes go back via `send-keys` and each window is sized per-pane with `refresh-client -C`. tmux still owns every process. From any terminal — including Blink on iPad — the workspace is directly reachable:
 
 ```bash
 tmux attach -t docai        # the whole workspace, panes as windows (Ctrl+B n/p to flip)

@@ -41,6 +41,10 @@ final class ClaudeStatusMonitor {
         timer = nil
     }
 
+    /// Transcript-tail cache: pane shortID → (transcript mtime, extracted
+    /// text). Scans run every few seconds; only re-parse when the file moved.
+    private var transcriptCache: [String: (mtime: Date, text: String?)] = [:]
+
     private func scan() {
         var result: [String: PaneStatus] = [:]
         let dir = Config.claudeStatusDirectory
@@ -61,13 +65,33 @@ final class ClaudeStatusMonitor {
             } else {
                 since = Date()
             }
+            let detail = detail(for: pane, state: state, statusJSON: obj)
             switch state {
             case "working": result[pane] = PaneStatus(state: .working, since: since)
-            case "needs-input": result[pane] = PaneStatus(state: .needsInput, since: since)
-            case "done": result[pane] = PaneStatus(state: .done, since: since)
+            case "needs-input": result[pane] = PaneStatus(state: .needsInput, since: since, detail: detail)
+            case "done": result[pane] = PaneStatus(state: .done, since: since, detail: detail)
             default: break
             }
         }
         onChange(result)
+    }
+
+    /// What does this pane need / what did it finish? Prefer the hook's
+    /// Notification message ("Claude needs your permission to …"); fall back
+    /// to the last assistant message in the transcript.
+    private func detail(for pane: String, state: String, statusJSON: [String: Any]) -> String? {
+        guard state == "needs-input" || state == "done" else { return nil }
+        if let message = statusJSON["detail"] as? String, !message.isEmpty {
+            return TranscriptReader.condense(message)
+        }
+        guard let transcript = statusJSON["transcript"] as? String, !transcript.isEmpty else { return nil }
+        let mtime = (try? FileManager.default.attributesOfItem(atPath: transcript)[.modificationDate] as? Date)
+            .flatMap { $0 } ?? .distantPast
+        if let cached = transcriptCache[pane], cached.mtime == mtime {
+            return cached.text
+        }
+        let text = TranscriptReader.lastAssistantText(transcriptPath: transcript)
+        transcriptCache[pane] = (mtime, text)
+        return text
     }
 }

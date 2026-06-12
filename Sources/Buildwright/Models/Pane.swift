@@ -24,10 +24,18 @@ enum ClaudeStatus: String, Codable {
 
 /// A Claude pane's current state plus when it entered that state — the
 /// difference between "needs you · 10s" and "needs you · 25m" is the whole
-/// point of attention management.
+/// point of attention management. `detail` says WHAT it needs / what it did:
+/// the Notification hook message or the last assistant transcript message.
 struct PaneStatus: Codable, Equatable {
     var state: ClaudeStatus
     var since: Date
+    var detail: String?
+
+    init(state: ClaudeStatus, since: Date, detail: String? = nil) {
+        self.state = state
+        self.since = since
+        self.detail = detail
+    }
 }
 
 func ageString(from since: Date, to now: Date = Date()) -> String {
@@ -73,6 +81,15 @@ struct Pane: Identifiable, Codable, Equatable {
     /// app-wide default at creation; nil (pre-feature state files) falls back
     /// to the app default at runtime.
     var browserPrivate: Bool?
+    /// Claude panes running in their own git worktree: the branch name
+    /// (e.g. "bw/fix-login-3a2f"). `directory` is the worktree path. The
+    /// worktree is removed (branch kept) when the pane closes clean.
+    var worktreeBranch: String?
+    /// On-deck panes (linear-preferred workflow): the pane this one waits
+    /// for. Cleared when started. Non-nil with no tmux window = queued.
+    var gatePaneID: UUID?
+    /// Prompt to launch with when the gate releases (nil = interactive).
+    var queuedPrompt: String?
 
     init(id: UUID = UUID(), kind: PaneKind, title: String, tmuxWindowID: String? = nil, directory: String, url: String? = nil) {
         self.id = id
@@ -90,6 +107,9 @@ struct Pane: Identifiable, Codable, Equatable {
 
     /// Short id used in tmux names, env vars and status files.
     var shortID: String { String(id.uuidString.prefix(8)).lowercased() }
+
+    /// On deck: waiting for its gate pane to finish before launching.
+    var isQueued: Bool { gatePaneID != nil && tmuxWindowID == nil }
 }
 
 // MARK: Browser tabs

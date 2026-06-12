@@ -57,10 +57,18 @@ final class AppState: ObservableObject {
             claudeSkipPermissions = saved.claudeSkipPermissions ?? true
             sharedBookmarks = saved.sharedBookmarks ?? []
             browserPrivateByDefault = saved.browserPrivateByDefault ?? true
+            terminalFontSize = saved.terminalFontSize ?? 13
+            layoutTemplates = saved.layoutTemplates ?? []
+            if let p = saved.chatPrompt, !p.isEmpty { chatPrompt = p }
+        }
+        TerminalViewCache.shared.applyFontSize(CGFloat(terminalFontSize))
+        // System-wide ⌥⌘B → app forward + Mission Control.
+        NotificationCenter.default.addObserver(forName: .bwSummon, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.showMissionControl = true }
         }
         tmux.claudeSkipPermissions = claudeSkipPermissions
-        // Remove leftover display helpers from a previous run before any
-        // pane attaches (they'll be recreated fresh on demand).
+        // Legacy sweep: remove hidden `_bw-` helper sessions left behind by
+        // pre-control-mode builds (current design never creates them).
         tmux.client.cleanupStaleGroupedSessions()
         if workspaces.isEmpty {
             showNewWorkspaceSheet = true
@@ -110,7 +118,10 @@ final class AppState: ObservableObject {
             featurePrompt: featurePrompt,
             claudeSkipPermissions: claudeSkipPermissions,
             sharedBookmarks: sharedBookmarks,
-            browserPrivateByDefault: browserPrivateByDefault
+            browserPrivateByDefault: browserPrivateByDefault,
+            terminalFontSize: terminalFontSize,
+            layoutTemplates: layoutTemplates,
+            chatPrompt: chatPrompt
         ))
     }
 
@@ -121,6 +132,7 @@ final class AppState: ObservableObject {
         if previous != statuses {
             snapshotActiveWorkspace()
             persist()
+            releaseQueuedPanes() // a gate may just have finished
         }
         // Notify when an unfocused pane flips to needsInput or done.
         guard let ws = activeWorkspace, let tab = ws.activeTab else { return }
@@ -130,9 +142,11 @@ final class AppState: ObservableObject {
             guard let title = paneTitle(forShortID: shortID) else { continue }
             switch status.state {
             case .needsInput:
-                ShellExec.notify(title: "Claude needs you", body: "\(title) is waiting for your input")
+                let what = status.detail ?? "is waiting for your input"
+                ShellExec.notify(title: "\(title) needs you", body: what)
             case .done:
-                ShellExec.notify(title: "Claude finished", body: "\(title) is done")
+                let what = status.detail ?? "is done"
+                ShellExec.notify(title: "\(title) finished", body: what)
             default: break
             }
         }
@@ -166,11 +180,12 @@ final class AppState: ObservableObject {
                 continue
             }
             guard before != after.state else { continue }
+            let detail = after.detail.map { ": \(TranscriptReader.condense($0, limit: 120))" } ?? ""
             switch after.state {
             case .done:
-                lines.append("“\(title)” finished (\(ageString(from: after.since, to: now)) ago)")
+                lines.append("“\(title)” finished (\(ageString(from: after.since, to: now)) ago)\(detail)")
             case .needsInput:
-                lines.append("“\(title)” is waiting on you (\(ageString(from: after.since, to: now)))")
+                lines.append("“\(title)” is waiting on you (\(ageString(from: after.since, to: now)))\(detail)")
             case .working:
                 lines.append("“\(title)” is still working")
             case .none:
@@ -269,17 +284,204 @@ final class AppState: ObservableObject {
     }
 
     func jump(to entry: AttentionEntry) {
-        if activeWorkspaceID != entry.workspaceID {
-            switchWorkspace(entry.workspaceID)
+        jump(workspaceID: entry.workspaceID, tabID: entry.tabID, paneID: entry.pane.id)
+    }
+
+    func jump(workspaceID: UUID, tabID: UUID, paneID: UUID) {
+        if activeWorkspaceID != workspaceID {
+            switchWorkspace(workspaceID)
         }
         if let wi = activeWorkspaceIndex {
-            workspaces[wi].activeTabID = entry.tabID
-            if let ti = workspaces[wi].tabs.firstIndex(where: { $0.id == entry.tabID }) {
-                workspaces[wi].tabs[ti].focusedPaneID = entry.pane.id
+            workspaces[wi].activeTabID = tabID
+            if let ti = workspaces[wi].tabs.firstIndex(where: { $0.id == tabID }) {
+                workspaces[wi].tabs[ti].focusedPaneID = paneID
             }
         }
         NSApp.activate(ignoringOtherApps: true)
         persist()
+    }
+
+    // MARK: Mission control
+
+    @Published var showMissionControl = false
+
+    struct OverviewEntry: Identifiable {
+        var id: UUID { pane.id }
+        let workspaceID: UUID
+        let workspaceName: String
+        let tabID: UUID
+        let tabName: String
+        let pane: Pane
+        let status: PaneStatus?
+    }
+
+    /// Every terminal pane in every workspace, grouped by workspace — the
+    /// single-pane-of-glass data source. Browser panes are omitted (no
+    /// status, nothing to monitor).
+    var missionControlGroups: [(workspaceName: String, entries: [OverviewEntry])] {
+        workspaces.map { ws in
+            var entries: [OverviewEntry] = []
+            for tab in ws.tabs {
+                for pane in tab.panes where pane.kind != .browser {
+                    entries.append(OverviewEntry(
+                        workspaceID: ws.id, workspaceName: ws.name,
+                        tabID: tab.id, tabName: tab.name,
+                        pane: pane, status: paneStatuses[pane.shortID]))
+                }
+            }
+            return (workspaceName: ws.name, entries: entries)
+        }
+        .filter { !$0.entries.isEmpty }
+    }
+
+    // MARK: Pane zoom
+
+    /// Temporarily show only this pane in its tab. Transient by design —
+    /// never persisted, cleared on tab/workspace switches.
+    @Published var zoomedPaneID: UUID?
+
+    func toggleZoom() {
+        guard let ws = activeWorkspace, let tab = ws.activeTab else { return }
+        if let z = zoomedPaneID, tab.panes.contains(where: { $0.id == z }) {
+            zoomedPaneID = nil
+        } else {
+            zoomedPaneID = tab.focusedPaneID
+        }
+    }
+
+    // MARK: Broadcast input
+
+    /// Mirror keystrokes to every terminal pane in the active tab (e.g. the
+    /// same /command to several Claude sessions). Auto-disarms on tab or
+    /// workspace switch — broadcast into the wrong tab is a disaster.
+    @Published var broadcastMode = false
+
+    func toggleBroadcast() {
+        broadcastMode.toggle()
+        syncBroadcastTargets()
+    }
+
+    func disarmTransientModes() {
+        zoomedPaneID = nil
+        broadcastMode = false
+        syncBroadcastTargets()
+    }
+
+    private func syncBroadcastTargets() {
+        guard broadcastMode, let ws = activeWorkspace, let tab = ws.activeTab else {
+            TerminalViewCache.shared.broadcastTargets = []
+            return
+        }
+        TerminalViewCache.shared.broadcastTargets =
+            Set(tab.panes.filter { $0.kind != .browser }.map(\.id))
+    }
+
+    // MARK: Terminal appearance
+
+    @Published var terminalFontSize: Double = 13 {
+        didSet {
+            guard oldValue != terminalFontSize else { return }
+            TerminalViewCache.shared.applyFontSize(CGFloat(terminalFontSize))
+            persist()
+        }
+    }
+
+    // MARK: Layout templates
+
+    @Published var layoutTemplates: [LayoutTemplate] = []
+
+    /// Snapshot the active tab's structure (pane kinds + dirs, not instances).
+    /// Worktree panes are templated as plain Claude panes in the base repo.
+    func saveCurrentTabAsTemplate(named name: String) {
+        guard let ws = activeWorkspace, let tab = ws.activeTab, let layout = tab.layout else { return }
+        func convert(_ node: LayoutNode) -> TemplateNode? {
+            switch node {
+            case .pane(let id):
+                guard let pane = tab.pane(id) else { return nil }
+                let dir = (pane.directory == ws.baseRepo || pane.worktreeBranch != nil) ? nil : pane.directory
+                return .pane(kind: pane.kind, directory: dir,
+                             url: pane.kind == .browser ? pane.url : nil)
+            case .split(let axis, let children, let fractions):
+                let kids = children.compactMap(convert)
+                guard !kids.isEmpty else { return nil }
+                let fracs = kids.count == children.count
+                    ? fractions
+                    : Array(repeating: 1.0 / Double(kids.count), count: kids.count)
+                return kids.count == 1 ? kids[0] : .split(axis: axis, children: kids, fractions: fracs)
+            }
+        }
+        guard let root = convert(layout) else { return }
+        layoutTemplates.removeAll { $0.name == name }
+        layoutTemplates.append(LayoutTemplate(name: name, node: root))
+        persist()
+    }
+
+    func deleteTemplate(_ name: String) {
+        layoutTemplates.removeAll { $0.name == name }
+        persist()
+    }
+
+    /// Open a new tab and populate it from a template.
+    func newTab(fromTemplate template: LayoutTemplate) {
+        guard let wi = activeWorkspaceIndex else { return }
+        let ws = workspaces[wi]
+        var tab = Tab(name: template.name)
+        func build(_ node: TemplateNode) -> LayoutNode? {
+            switch node {
+            case .pane(let kind, let directory, let url):
+                let dir = directory ?? ws.baseRepo
+                let title: String
+                switch kind {
+                case .claude: title = "claude"
+                case .shell: title = "shell"
+                case .browser: title = "browser"
+                }
+                var pane = Pane(kind: kind, title: title, directory: dir,
+                                url: kind == .browser ? (url ?? "https://docs.anthropic.com") : nil)
+                if kind == .browser {
+                    pane.browserPrivate = browserPrivateByDefault
+                } else {
+                    guard let windowID = tmux.createWindow(for: pane, in: ws) else { return nil }
+                    pane.tmuxWindowID = windowID
+                }
+                tab.panes.append(pane)
+                return .pane(pane.id)
+            case .split(let axis, let children, let fractions):
+                let kids = children.compactMap(build)
+                guard !kids.isEmpty else { return nil }
+                if kids.count == 1 { return kids[0] }
+                let fracs = kids.count == children.count
+                    ? fractions
+                    : Array(repeating: 1.0 / Double(kids.count), count: kids.count)
+                return .split(axis: axis, children: kids, fractions: fracs)
+            }
+        }
+        guard let layout = build(template.node) else {
+            ShellExec.notify(title: "Buildwright", body: "Could not create panes from template — is tmux running?")
+            return
+        }
+        tab.layout = layout
+        tab.focusedPaneID = tab.panes.first?.id
+        workspaces[wi].tabs.append(tab)
+        workspaces[wi].activeTabID = tab.id
+        persist()
+    }
+
+    /// "Save Tab Layout as Template…" — NSAlert keeps this dependency-free.
+    func promptSaveTemplate() {
+        let alert = NSAlert()
+        alert.messageText = "Save Tab Layout as Template"
+        alert.informativeText = "The current tab's pane arrangement (kinds and folders) will be reusable from Workspace → New Tab from Template."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 230, height: 24))
+        field.placeholderString = "Template name"
+        field.stringValue = activeWorkspace?.activeTab?.name ?? ""
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let name = field.stringValue.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return }
+        saveCurrentTabAsTemplate(named: name)
     }
 
     private func paneTitle(forShortID shortID: String) -> String? {
@@ -325,6 +527,7 @@ final class AppState: ObservableObject {
 
     func switchWorkspace(_ id: UUID) {
         snapshotActiveWorkspace() // record the world we're leaving
+        disarmTransientModes()
         activeWorkspaceID = id
         if let ws = activeWorkspace {
             tmux.ensureWorkspaceSession(ws)
@@ -363,6 +566,7 @@ final class AppState: ObservableObject {
 
     func selectTab(_ tabID: UUID) {
         guard let wi = activeWorkspaceIndex else { return }
+        disarmTransientModes()
         workspaces[wi].activeTabID = tabID
         persist()
     }
@@ -372,23 +576,44 @@ final class AppState: ObservableObject {
     /// Add a pane. If a pane is focused it splits beside it along `axis`;
     /// otherwise it fills the tab or splits the whole layout.
     func addPane(kind: PaneKind, axis: SplitAxis = .horizontal, directory: String? = nil,
-                 title: String? = nil, prompt: String? = nil, url: String? = nil) {
+                 title: String? = nil, prompt: String? = nil, url: String? = nil,
+                 worktree: Bool = false) {
         guard let wi = activeWorkspaceIndex else { return }
         let ws = workspaces[wi]
         guard let ti = ws.tabs.firstIndex(where: { $0.id == (ws.activeTabID ?? ws.tabs.first?.id) }) else { return }
 
-        let dir = directory ?? ws.baseRepo
+        var dir = directory ?? ws.baseRepo
+        var worktreeBranch: String?
+        if worktree && kind == .claude {
+            let slug = GitWorktree.slug(from: title ?? prompt ?? "agent")
+            guard let wt = GitWorktree.create(repo: ws.baseRepo, slug: slug) else {
+                ShellExec.notify(title: "Buildwright",
+                                 body: "Could not create worktree — is \(ws.baseRepo) a git repo?")
+                return
+            }
+            dir = wt.path
+            worktreeBranch = wt.branch
+        }
         let defaultTitle: String
         switch kind {
-        case .claude: defaultTitle = "claude"
+        case .claude: defaultTitle = worktreeBranch.map { String($0.dropFirst(3)) } ?? "claude"
         case .shell: defaultTitle = "shell"
         case .browser: defaultTitle = "browser"
         }
         var pane = Pane(kind: kind, title: title ?? defaultTitle, directory: dir,
                         url: kind == .browser ? (url ?? "https://docs.anthropic.com") : nil)
+        pane.worktreeBranch = worktreeBranch
         if kind == .browser { pane.browserPrivate = browserPrivateByDefault }
 
-        if kind != .browser {
+        // Safety gate (linear-preferred): a Claude pane opening in a folder
+        // where another Claude pane is actively working goes ON DECK instead
+        // of starting — two agents must never share a working tree. The
+        // placeholder offers Start Now / worktree escape hatches.
+        if kind == .claude, worktreeBranch == nil,
+           let gate = workingClaudePane(inDirectory: dir, of: ws) {
+            pane.gatePaneID = gate.id
+            pane.queuedPrompt = prompt
+        } else if kind != .browser {
             guard let windowID = tmux.createWindow(for: pane, in: ws, prompt: prompt) else {
                 ShellExec.notify(title: "Buildwright", body: "Could not create tmux window — is tmux installed?")
                 return
@@ -415,6 +640,131 @@ final class AppState: ObservableObject {
         }
         workspaces[wi].tabs[ti].focusedPaneID = pane.id
         persist()
+    }
+
+    // MARK: On-deck queue (linear-preferred workflow)
+
+    @Published var showTeeUpSheet = false
+
+    /// The Claude pane currently WORKING in this directory, if any — the
+    /// thing a new same-folder pane must wait for.
+    func workingClaudePane(inDirectory dir: String, of ws: Workspace) -> Pane? {
+        for tab in ws.tabs {
+            for pane in tab.panes
+            where pane.kind == .claude && pane.directory == dir && !pane.isQueued {
+                if paneStatuses[pane.shortID]?.state == .working { return pane }
+            }
+        }
+        return nil
+    }
+
+    /// Start queued panes whose gate finished or disappeared. Called on every
+    /// status change and after pane closes — covers app relaunch too (the
+    /// first status scan triggers it).
+    func releaseQueuedPanes() {
+        for wi in workspaces.indices {
+            for ti in workspaces[wi].tabs.indices {
+                for pane in workspaces[wi].tabs[ti].panes where pane.isQueued {
+                    guard let gateID = pane.gatePaneID else { continue }
+                    let gate = workspaces[wi].tabs.lazy
+                        .flatMap(\.panes).first { $0.id == gateID }
+                    let gateDone = gate.map { paneStatuses[$0.shortID]?.state == .done } ?? true
+                    if gate == nil || gateDone {
+                        startQueuedPane(pane.id)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Launch an on-deck pane now (gate released, or the user said so).
+    func startQueuedPane(_ paneID: UUID) {
+        for wi in workspaces.indices {
+            let ws = workspaces[wi]
+            for ti in workspaces[wi].tabs.indices {
+                guard let pi = workspaces[wi].tabs[ti].panes.firstIndex(where: { $0.id == paneID }),
+                      workspaces[wi].tabs[ti].panes[pi].isQueued else { continue }
+                var pane = workspaces[wi].tabs[ti].panes[pi]
+                guard let windowID = tmux.createWindow(for: pane, in: ws, prompt: pane.queuedPrompt) else {
+                    ShellExec.notify(title: "Buildwright", body: "Could not start on-deck pane — is tmux running?")
+                    return
+                }
+                pane.tmuxWindowID = windowID
+                pane.gatePaneID = nil
+                pane.queuedPrompt = nil
+                workspaces[wi].tabs[ti].panes[pi] = pane
+                ShellExec.notify(title: "On deck pane started", body: "“\(pane.title)” in \(ws.name) is now running")
+                persist()
+                return
+            }
+        }
+    }
+
+    /// Escape hatch: run an on-deck pane NOW in its own worktree (parallel-safe).
+    func startQueuedPaneInWorktree(_ paneID: UUID) {
+        for wi in workspaces.indices {
+            let ws = workspaces[wi]
+            for ti in workspaces[wi].tabs.indices {
+                guard let pi = workspaces[wi].tabs[ti].panes.firstIndex(where: { $0.id == paneID }),
+                      workspaces[wi].tabs[ti].panes[pi].isQueued else { continue }
+                var pane = workspaces[wi].tabs[ti].panes[pi]
+                let slug = GitWorktree.slug(from: pane.queuedPrompt ?? pane.title)
+                guard let wt = GitWorktree.create(repo: ws.baseRepo, slug: slug) else {
+                    ShellExec.notify(title: "Buildwright", body: "Could not create worktree — is \(ws.baseRepo) a git repo?")
+                    return
+                }
+                pane.directory = wt.path
+                pane.worktreeBranch = wt.branch
+                pane.gatePaneID = nil // gate no longer applies; isolated now
+                workspaces[wi].tabs[ti].panes[pi] = pane
+                startQueuedPaneNow(wi: wi, ti: ti, paneID: paneID)
+                return
+            }
+        }
+    }
+
+    private func startQueuedPaneNow(wi: Int, ti: Int, paneID: UUID) {
+        guard let pi = workspaces[wi].tabs[ti].panes.firstIndex(where: { $0.id == paneID }) else { return }
+        var pane = workspaces[wi].tabs[ti].panes[pi]
+        let ws = workspaces[wi]
+        guard let windowID = tmux.createWindow(for: pane, in: ws, prompt: pane.queuedPrompt) else { return }
+        pane.tmuxWindowID = windowID
+        pane.queuedPrompt = nil
+        workspaces[wi].tabs[ti].panes[pi] = pane
+        persist()
+    }
+
+    /// Title of the pane an on-deck pane is waiting on (for the placeholder).
+    func gateTitle(for pane: Pane) -> String? {
+        guard let gateID = pane.gatePaneID else { return nil }
+        for ws in workspaces {
+            for tab in ws.tabs {
+                if let gate = tab.panes.first(where: { $0.id == gateID }) { return gate.title }
+            }
+        }
+        return nil
+    }
+
+    // MARK: Chat pane (always parallel-safe)
+
+    static let defaultChatPrompt = """
+    You are a thinking partner, not an implementer. We're going to talk through ideas — \
+    new features, fixes, architecture, priorities. Push back on weak ideas, ask clarifying \
+    questions, and explore trade-offs honestly.
+
+    When we settle on something worth doing, file it in the backlog board in the current \
+    directory as markdown, following the existing Epic → Story → Task conventions you find \
+    here. Do NOT write code and do NOT touch any other repository — your only output is \
+    conversation and backlog entries.
+    """
+
+    @Published var chatPrompt: String = AppState.defaultChatPrompt
+
+    /// Chat panes live in the backlog directory: discussion in, backlog items
+    /// out, zero contact with code — safe alongside anything.
+    func addChatPane() {
+        addPane(kind: .claude, directory: Config.backlogDirectory.path,
+                title: "chat", prompt: chatPrompt)
     }
 
     enum DockSide { case left, right }
@@ -449,13 +799,22 @@ final class AppState: ObservableObject {
                 tmux.destroyWindow(for: pane, in: ws)
                 paneStatuses.removeValue(forKey: pane.shortID)
             }
+            if let branch = pane.worktreeBranch {
+                let removed = GitWorktree.removeIfClean(repo: ws.baseRepo, path: pane.directory)
+                ShellExec.notify(title: "Buildwright", body: removed
+                    ? "Worktree removed — branch \(branch) kept"
+                    : "Worktree kept (uncommitted changes): \(pane.directory)")
+            }
             workspaces[wi].tabs[ti].layout = workspaces[wi].tabs[ti].layout?.removing(paneID)
             workspaces[wi].tabs[ti].panes.removeAll { $0.id == paneID }
             if workspaces[wi].tabs[ti].focusedPaneID == paneID {
                 workspaces[wi].tabs[ti].focusedPaneID = workspaces[wi].tabs[ti].panes.first?.id
             }
         }
+        if zoomedPaneID == paneID { zoomedPaneID = nil }
+        syncBroadcastTargets()
         persist()
+        releaseQueuedPanes() // closing a gate pane releases its queue
     }
 
     func focusPane(_ paneID: UUID) {
