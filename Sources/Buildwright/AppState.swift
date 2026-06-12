@@ -1062,13 +1062,25 @@ final class AppState: ObservableObject {
                 for ws in self.workspaces {
                     guard let live = result[ws.id] else { continue }
                     var suspects: [Pane] = []
+                    // Falsely-latched exited panes whose window is in the
+                    // live set heal in the other direction.
+                    var falselyExited: [Pane] = []
                     for tab in ws.tabs {
                         for pane in tab.panes where pane.isTerminal && !pane.isQueued {
-                            guard let wid = pane.tmuxWindowID, !live.contains(wid),
-                                  TerminalViewCache.shared.runStates[pane.id] == nil,
-                                  TerminalViewCache.shared.contains(pane.id) else { continue }
-                            suspects.append(pane)
+                            guard let wid = pane.tmuxWindowID else { continue }
+                            if live.contains(wid) {
+                                if TerminalViewCache.shared.runStates[pane.id] == .exited {
+                                    falselyExited.append(pane)
+                                }
+                            } else if TerminalViewCache.shared.runStates[pane.id] == nil,
+                                      TerminalViewCache.shared.contains(pane.id) {
+                                suspects.append(pane)
+                            }
                         }
+                    }
+                    for pane in falselyExited {
+                        TerminalViewCache.shared.clearExitedIfAlive(pane.id)
+                        healed.append("\(ws.name): “\(pane.title)” marked exited but window is alive — cleared")
                     }
                     guard !suspects.isEmpty else { continue }
                     // Re-verify against a FRESH listing: the background

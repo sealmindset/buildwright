@@ -287,6 +287,11 @@ final class TerminalViewCache: ObservableObject {
 
     func deliver(paneID: String, bytes: [UInt8]) {
         guard let id = paneIDToView[paneID], let view = views[id] else { return }
+        // Output is proof of life: a pane wrongly latched as exited/lost
+        // (restart/reconnect races) un-marks itself the moment it speaks.
+        if runStates[id] == .exited || runStates[id] == .lost {
+            runStates.removeValue(forKey: id)
+        }
         view.deliver(bytes: bytes)
     }
 
@@ -358,6 +363,12 @@ final class TerminalViewCache: ObservableObject {
     /// (missed event, sleep/wake gap) gets the exited overlay.
     func markExited(_ paneID: UUID) {
         if runStates[paneID] == nil { runStates[paneID] = .exited }
+    }
+
+    /// The reverse heal: a pane latched exited whose window is verifiably
+    /// alive gets un-marked (used by the window sweep with a fresh listing).
+    func clearExitedIfAlive(_ paneID: UUID) {
+        if runStates[paneID] == .exited { runStates.removeValue(forKey: paneID) }
     }
 
     /// One-paste debugging: everything I need to diagnose a display issue.
