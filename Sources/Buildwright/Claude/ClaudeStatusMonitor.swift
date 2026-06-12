@@ -69,14 +69,30 @@ final class ClaudeStatusMonitor {
             let detail = (state == "needs-input" || state == "done")
                 ? ((obj["detail"] as? String).flatMap { $0.isEmpty ? nil : TranscriptReader.condense($0) } ?? info.text)
                 : nil
+            // Context size: the statusline-fed sidecar is the live source —
+            // current Claude Code no longer writes usage records to the
+            // transcript, so info.tokens only works for older sessions.
+            let tokens = Self.parseTokens(data: try? Data(contentsOf: dir.appendingPathComponent("\(pane).tokens"))) ?? info.tokens
             switch state {
-            case "working": result[pane] = PaneStatus(state: .working, since: since, contextTokens: info.tokens)
-            case "needs-input": result[pane] = PaneStatus(state: .needsInput, since: since, detail: detail, contextTokens: info.tokens)
-            case "done": result[pane] = PaneStatus(state: .done, since: since, detail: detail, contextTokens: info.tokens)
+            case "working": result[pane] = PaneStatus(state: .working, since: since, contextTokens: tokens)
+            case "needs-input": result[pane] = PaneStatus(state: .needsInput, since: since, detail: detail, contextTokens: tokens)
+            case "done": result[pane] = PaneStatus(state: .done, since: since, detail: detail, contextTokens: tokens)
             default: break
             }
         }
         onChange(result)
+    }
+
+    /// Parses a `<pane>.tokens` sidecar written by the user's statusline
+    /// script: `{"pane":"…","ts":…,"tokens":126933}`. Claude Code pushes
+    /// fresh context_window usage to the statusline on every refresh, which
+    /// makes it the one reliable token source across session types.
+    static func parseTokens(data: Data?) -> Int? {
+        guard let data,
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        let tokens = (obj["tokens"] as? Int) ?? (obj["tokens"] as? Double).map(Int.init)
+        guard let tokens, tokens > 0 else { return nil }
+        return tokens
     }
 
     /// Transcript tail (mtime-cached): last assistant text + context tokens.

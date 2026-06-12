@@ -61,6 +61,18 @@ struct BwHookTests {
         #expect(status["detail"] as? String == "")
     }
 
+    /// The statusline script writes `<pane>.tokens` sidecars; the monitor
+    /// parses them as the live context-size source (transcripts no longer
+    /// carry usage records in current Claude Code).
+    @Test @MainActor func tokensSidecarParsing() {
+        #expect(ClaudeStatusMonitor.parseTokens(
+            data: Data(#"{"pane":"ab771254","ts":1781305588,"tokens":126933}"#.utf8)) == 126933)
+        #expect(ClaudeStatusMonitor.parseTokens(data: Data(#"{"tokens":0}"#.utf8)) == nil)
+        #expect(ClaudeStatusMonitor.parseTokens(data: Data("not json".utf8)) == nil)
+        #expect(ClaudeStatusMonitor.parseTokens(data: Data()) == nil)
+        #expect(ClaudeStatusMonitor.parseTokens(data: nil) == nil)
+    }
+
     /// The repo's Scripts/bw-hook is documented as a mirror of the embedded
     /// script; keep them from drifting (modulo the reference-copy header).
     @Test func scriptsCopyMirrorsEmbedded() throws {
