@@ -19,7 +19,9 @@ APP="dist/Buildwright.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
-cp ".build/release/Buildwright" "$APP/Contents/MacOS/Buildwright"
+# -X: drop extended attributes — macOS provenance xattrs survive xattr -cr
+# and make codesign reject the bundle ("detritus not allowed").
+cp -X ".build/release/Buildwright" "$APP/Contents/MacOS/Buildwright"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
