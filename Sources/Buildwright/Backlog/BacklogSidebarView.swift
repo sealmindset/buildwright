@@ -75,14 +75,23 @@ struct BacklogSidebarView: View {
     var filters: BacklogFilters { app.activeFilters }
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            upNextStrip
-            driftStrip
-            Divider()
-            filterBar
-            Divider()
-            list
+        GeometryReader { geo in
+            VStack(spacing: 0) {
+                VStack(spacing: 0) {
+                    header
+                    upNextStrip
+                    driftStrip
+                    Divider()
+                    filterBar
+                    Divider()
+                    list
+                }
+                .frame(height: geo.size.height * 0.66)
+                Divider()
+                // The SCRUM master chat owns the bottom third of the sidebar.
+                ScrumMasterView(master: app.scrumMaster)
+                    .frame(height: geo.size.height * 0.34)
+            }
         }
         .frame(minWidth: 230)
         .background(.background.secondary)

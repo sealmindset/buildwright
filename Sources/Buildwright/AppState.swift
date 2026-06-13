@@ -25,6 +25,7 @@ final class AppState: ObservableObject {
     let backlog = BacklogStore()
     let planner = BacklogPlanner()
     let groomer = BacklogGroomer()
+    let scrumMaster = ScrumMaster()
     @Published var showPlanSheet = false
     @Published var showGroomSheet = false
     @Published var autoPlanOnLaunch = true
@@ -78,7 +79,9 @@ final class AppState: ObservableObject {
         }
         planner.onCost = { [weak self] usd in self?.recordAISpend(usd) }
         groomer.onCost = { [weak self] usd in self?.recordAISpend(usd) }
-        applyClaudeModel() // push the loaded model into tmux/planner/groomer
+        scrumMaster.onCost = { [weak self] usd in self?.recordAISpend(usd) }
+        scrumMaster.onAction = { [weak self] action in self?.executeScrumAction(action) }
+        applyClaudeModel() // push the loaded model into tmux/planner/groomer/scrum
         TerminalViewCache.shared.applyFontSize(CGFloat(terminalFontSize))
         // System-wide ⌥⌘B → app forward + Mission Control.
         NotificationCenter.default.addObserver(forName: .bwSummon, object: nil, queue: .main) { [weak self] _ in
@@ -1660,7 +1663,101 @@ final class AppState: ObservableObject {
         tmux.claudeModel = claudeModel
         planner.model = claudeModel
         groomer.model = claudeModel
+        scrumMaster.model = claudeModel
         persist()
+    }
+
+    // MARK: SCRUM master (conversational backlog sequencing)
+
+    /// The live board+plan snapshot fed to the SCRUM master each turn so its
+    /// answers track current reality (statuses, story progress, what's
+    /// running) — not just what it read once.
+    func scrumContext() -> String {
+        var statusByID: [String: String] = [:]
+        var progress: [String: (Int, Int)] = [:]
+        for g in backlog.epics {
+            statusByID[g.epic.itemID] = g.epic.status
+            progress[g.epic.itemID] = (g.stories.filter(\.isDone).count, g.stories.count)
+            for s in g.stories { statusByID[s.itemID] = s.status }
+        }
+        var out = "CURRENT BOARD STATE (\(Self.dayFormatter.string(from: Date())))\n"
+        if let plan = planner.plan {
+            out += "\nBuild sequence (order = AI plan; deps = hard prereqs, conflicts = never concurrent):\n"
+            for (i, e) in plan.epics.enumerated() {
+                let st = statusByID[e.id] ?? "not-on-board"
+                let prog = progress[e.id].map { $0.1 > 0 ? " \($0.0)/\($0.1) stories" : "" } ?? ""
+                out += "\(i + 1). \(e.id) [\(st)\(prog)] \(e.title) (\(e.effort))"
+                if let d = e.dependsOn, !d.isEmpty { out += " · deps: \(d.joined(separator: ","))" }
+                if let c = e.conflictsWith, !c.isEmpty { out += " · conflicts: \(c.joined(separator: ","))" }
+                out += "\n"
+            }
+            let ps = plan.parallelSafe ?? []
+            out += "Parallel-safe whitelist: " + (ps.isEmpty ? "(empty — linear is the play)" : ps.map(\.id).joined(separator: ", ")) + "\n"
+            out += "Plan generated \(ageString(from: plan.generatedAt, to: Date())) ago.\n"
+        } else {
+            out += "(No saved build plan yet — reason from the item files and note that a plan run would sharpen this.)\n"
+        }
+        let inProg = backlog.epics.flatMap { [$0.epic] + $0.stories }.filter { $0.status == "in-progress" }
+        if !inProg.isEmpty {
+            out += "In progress now: " + inProg.map { "\($0.itemID) (\($0.title))" }.joined(separator: "; ") + "\n"
+        }
+        var working: [String] = []
+        for ws in workspaces {
+            for tab in ws.tabs {
+                for p in tab.panes where p.kind == .claude && paneStatuses[p.shortID]?.state == .working {
+                    working.append(p.title)
+                }
+            }
+        }
+        if !working.isEmpty { out += "Claude panes working right now: " + working.joined(separator: ", ") + "\n" }
+        return out
+    }
+
+    func askScrumMaster(_ question: String) {
+        scrumMaster.ask(question, context: scrumContext())
+    }
+
+    /// Apply a SCRUM-master action the user confirmed, then log the ruling to
+    /// DECISIONS.md and the item's own history (traceability).
+    private func executeScrumAction(_ action: SMAction) {
+        guard let item = backlogItem(byID: action.item) else {
+            ShellExec.notify(title: "SCRUM master", body: "\(action.item) isn't on the board anymore")
+            return
+        }
+        switch action.kind {
+        case "start":
+            startBacklogItem(item)
+            logRuling(item: action.item, "SCRUM master cleared \(action.item) to start — \(action.summary)")
+        case "queue":
+            let blocker = action.blocker ?? primaryActiveEpic(besides: epicID(of: item))
+            addPane(kind: .claude, title: item.itemID,
+                    prompt: "/backlog start \(item.itemID)", gateEpicID: blocker)
+            ShellExec.notify(title: "\(item.itemID) on deck",
+                             body: blocker.map { "Starts when \($0) is done" } ?? "Queued")
+            logRuling(item: action.item,
+                      "SCRUM master gated \(action.item) behind \(action.blocker ?? "active work") — \(action.summary)")
+        case "reprioritize":
+            planner.reprioritize(itemID: epicID(of: item))
+            logRuling(item: action.item, "SCRUM master moved \(action.item) up the build sequence — \(action.summary)")
+        default:
+            break
+        }
+    }
+
+    /// A SCRUM ruling, recorded both project-wide (DECISIONS.md) and on the
+    /// item itself (its History section).
+    private func logRuling(item: String, _ line: String) {
+        recordItemEvent(item, line)
+        appendDecision(line)
+    }
+
+    private func appendDecision(_ line: String) {
+        let url = Config.backlogDirectory.appendingPathComponent("DECISIONS.md")
+        let stamp = Self.dayFormatter.string(from: Date())
+        var body = (try? String(contentsOf: url, encoding: .utf8)) ?? "# Decisions\n\nProject decisions, newest last.\n"
+        while body.hasSuffix("\n") { body.removeLast() }
+        body += "\n\n- **\(stamp)** — \(line)\n"
+        try? body.write(to: url, atomically: true, encoding: .utf8)
     }
 
     /// New browser panes start as private sessions (nothing saved to disk).

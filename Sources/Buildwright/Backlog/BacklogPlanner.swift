@@ -182,6 +182,19 @@ final class BacklogPlanner: ObservableObject {
                          body: "First up: \(parsed.epics[0].id) — \(parsed.epics[0].title) · \(parallelNote)")
     }
 
+    /// Move an epic to the front of the saved build sequence and persist —
+    /// the SCRUM master's "prioritize this" action once it has ruled the move
+    /// safe. generatedAt is left untouched so this doesn't read as a stale
+    /// plan and trigger an auto re-plan.
+    func reprioritize(itemID: String) {
+        guard var current = plan,
+              let idx = current.epics.firstIndex(where: { $0.id == itemID }), idx > 0 else { return }
+        let moved = current.epics.remove(at: idx)
+        current.epics.insert(moved, at: 0)
+        plan = current
+        save(current)
+    }
+
     // MARK: Parsing
 
     struct PlanPayload: Codable {
