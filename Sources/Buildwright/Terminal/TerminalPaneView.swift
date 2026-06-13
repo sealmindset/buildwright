@@ -70,6 +70,32 @@ final class ControlModeTerminalView: TerminalView, TerminalViewDelegate {
                             tmuxCols: tmuxCols, tmuxRows: tmuxRows)
     }
 
+    /// Assert the view's real size to tmux NOW, bypassing the replay guard.
+    /// Called the moment the pane attaches so tmux reflows the pane to the
+    /// width we actually display BEFORE content is captured/redrawn — the
+    /// root fix for wrong-width replay snapshots that scramble pickers.
+    func assertSizeNow() {
+        guard window != nil, control?.isAlive == true else { return }
+        let t = getTerminal()
+        guard t.cols > 1, t.rows > 1 else { return }
+        sendSize(cols: t.cols, rows: t.rows)
+    }
+
+    /// Debounced clean rebuild from tmux truth. Scheduled after a pane appears
+    /// or a resize settles, so whatever transient garble a resize/reflow left
+    /// is replaced by a correct-width snapshot ~⅓s later — no user action.
+    private var pendingCleanRedraw: DispatchWorkItem?
+    func scheduleCleanRedraw(after seconds: Double = 0.3) {
+        pendingCleanRedraw?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.window != nil, self.control?.isAlive == true,
+                  !self.awaitingHistory else { return }
+            self.refreshFromTmux()
+        }
+        pendingCleanRedraw = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
+    }
+
     /// Force this pane back into agreement: push the real view size to tmux
     /// and rebuild the display from tmux truth (clears any scrambled frame).
     /// Wired to the header's size chip so you can fix drift in one click.
@@ -245,6 +271,9 @@ final class ControlModeTerminalView: TerminalView, TerminalViewDelegate {
         sendSize(cols: newCols, rows: newRows)
         // Surface the new size immediately (don't wait for the 2s tick).
         TerminalViewCache.shared.refreshSizeInfo()
+        // After the resize settles, rebuild clean: a full-screen picker that
+        // reflowed at the old width gets repainted at the new one.
+        scheduleCleanRedraw()
     }
 
     func setTerminalTitle(source: TerminalView, title: String) {}
@@ -524,9 +553,13 @@ struct TerminalPaneView: NSViewRepresentable {
             tv.frame = container.bounds
             tv.autoresizingMask = [.width, .height]
             container.addSubview(tv)
-            // Re-attached after a tab switch: push the real size once the
-            // frame settles (detached resizes were deliberately ignored).
-            DispatchQueue.main.async { tv.reconcileSize() }
+            // Now attached with the real frame: assert that size to tmux at
+            // once (so the pane is the width we display BEFORE anything is
+            // captured/drawn), then rebuild clean once the frame settles.
+            DispatchQueue.main.async {
+                tv.assertSizeNow()
+                tv.scheduleCleanRedraw(after: 0.35)
+            }
         } else {
             let label = NSTextField(labelWithString: "tmux unavailable — install tmux and reopen this pane")
             label.frame = container.bounds
