@@ -121,8 +121,15 @@ struct TmuxClient {
         let t = "\(session):" // set-option needs "name:" form, not "=name"
         run(["set-option", "-t", t, "history-limit", "30000"])
         run(["set-option", "-t", t, "mouse", "on"])
-        run(["set-option", "-t", t, "window-size", "latest"])
-        run(["set-option", "-t", t, "aggressive-resize", "on"])
+        // The iTerm2 control-mode model: the control client is the SOLE
+        // authority on each window's size, set per-window via
+        // `refresh-client -C @id:WxH`. "latest" + aggressive-resize let tmux
+        // re-size windows to whatever client last touched them, leaving our
+        // SwiftTerm view a few columns off — every full-width TUI line then
+        // wraps wrong and overstrikes (the recurring "format" garble).
+        // "manual" freezes sizing to exactly what we push.
+        run(["set-option", "-t", t, "window-size", "manual"])
+        run(["set-option", "-t", t, "aggressive-resize", "off"])
         run(["set-option", "-t", t, "renumber-windows", "on"])
         run(["set-option", "-t", t, "set-titles", "on"])
         run(["set-option", "-t", t, "default-terminal", "tmux-256color"])

@@ -73,9 +73,59 @@ final class ControlModeTerminalView: TerminalView, TerminalViewDelegate {
         self.control = control
         super.init(frame: frame)
         terminalDelegate = self
+        // Drag a file (image, doc, anything) onto the pane → its path is
+        // typed in, the way Terminal.app does it. Claude Code reads image
+        // paths directly, so this is the "attach a screenshot" gesture.
+        // Append rather than replace so SwiftTerm's own drag types survive.
+        registerForDraggedTypes(registeredDraggedTypes + [.fileURL])
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    // MARK: Drag-and-drop file paths
+
+    private func draggedFileURLs(_ sender: NSDraggingInfo) -> [URL] {
+        sender.draggingPasteboard.readObjects(
+            forClasses: [NSURL.self],
+            options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        draggedFileURLs(sender).isEmpty ? super.draggingEntered(sender) : .copy
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        draggedFileURLs(sender).isEmpty ? super.draggingUpdated(sender) : .copy
+    }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        draggedFileURLs(sender).isEmpty ? super.prepareForDragOperation(sender) : true
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let urls = draggedFileURLs(sender)
+        guard !urls.isEmpty else { return super.performDragOperation(sender) }
+        // Space-separated, each shell-escaped — matches Terminal.app and lets
+        // the running program (Claude Code, a shell) parse multiple paths.
+        let text = urls.map { Self.shellEscape($0.path) }.joined(separator: " ") + " "
+        control?.sendKeys(paneID: paneID, bytes: Array(text.utf8))
+        window?.makeFirstResponder(self)
+        return true
+    }
+
+    /// Backslash-escape the characters a shell or @-path parser would choke
+    /// on, so paths with spaces/parens drop in usable. Plain paths pass
+    /// through untouched.
+    static func shellEscape(_ path: String) -> String {
+        let special = Set(" \t\n\"'\\()[]{}<>|&;*?$`!#~")
+        var out = ""
+        out.reserveCapacity(path.count)
+        for ch in path {
+            if special.contains(ch) { out.append("\\") }
+            out.append(ch)
+        }
+        return out
+    }
 
     /// Point at a fresh control connection after a reconnect, wipe the stale
     /// buffer, and replay from tmux's current truth.
