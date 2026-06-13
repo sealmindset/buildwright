@@ -34,6 +34,22 @@ struct BuildwrightApp: App {
                 .onAppear { app.bootstrap() }
         }
         .commands {
+            // Standard Edit menu. SwiftTerm implements copy:/paste:/selectAll:
+            // but does NOT handle ⌘C/⌘V in keyDown — it relies on these menu
+            // items to route the shortcut to the focused terminal through the
+            // responder chain. Without this menu, ⌘V did nothing in a pane.
+            // `to: nil` dispatches to the first responder; AppKit auto-disables
+            // an item the focused view can't handle (e.g. Cut in a terminal).
+            CommandGroup(replacing: .pasteboard) {
+                Button("Cut") { NSApp.sendAction(#selector(NSText.cut(_:)), to: nil, from: nil) }
+                    .keyboardShortcut("x", modifiers: .command)
+                Button("Copy") { NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil) }
+                    .keyboardShortcut("c", modifiers: .command)
+                Button("Paste") { NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: nil) }
+                    .keyboardShortcut("v", modifiers: .command)
+                Button("Select All") { NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil) }
+                    .keyboardShortcut("a", modifiers: .command)
+            }
             CommandMenu("Panes") {
                 Button("New Claude Pane (split right)") { app.addPane(kind: .claude, axis: .horizontal) }
                     .keyboardShortcut("n", modifiers: .command)
