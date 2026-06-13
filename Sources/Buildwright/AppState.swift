@@ -26,6 +26,7 @@ final class AppState: ObservableObject {
     let planner = BacklogPlanner()
     let groomer = BacklogGroomer()
     let scrumMaster = ScrumMaster()
+    let permissions = PermissionsManager()
     @Published var showPlanSheet = false
     @Published var showGroomSheet = false
     @Published var autoPlanOnLaunch = true
@@ -103,6 +104,7 @@ final class AppState: ObservableObject {
         backlog.startWatching()
         planner.loadSavedPlan()
         groomer.loadSavedReport()
+        permissions.refresh() // so the Settings panel reflects reality on open
         // Weekly hygiene pass, well after launch so it never competes with
         // reattach or the auto-plan.
         Task { @MainActor in

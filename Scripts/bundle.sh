@@ -9,8 +9,8 @@ if [ -d "/Applications/Xcode.app" ]; then
   export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 fi
 
-VERSION="0.27.0"
-BUILD_NUMBER="30"
+VERSION="0.28.0"
+BUILD_NUMBER="31"
 
 echo "Building release binary..."
 swift build -c release
@@ -58,7 +58,25 @@ PLIST
 
 # Strip extended attributes (FinderInfo/quarantine) — codesign rejects them.
 xattr -cr "$APP" 2>/dev/null || true
-codesign --force --deep --sign - "$APP"
+
+# Stable signing so macOS privacy (TCC) grants — Automation, Accessibility,
+# Notifications — PERSIST across rebuilds. Ad-hoc (--sign -) changes the
+# signature every build, so macOS treats each install as a new app and resets
+# every grant, re-prompting forever. Run Scripts/make-signing-cert.sh once to
+# create the identity; until then we fall back to ad-hoc with a warning.
+# Match by HASH, not name: a self-signed identity is untrusted (so it's
+# absent from `find-identity -v`) and signing by name is ambiguous if more
+# than one exists — both make codesign silently fall back to ad-hoc.
+SIGN_IDENTITY="${BW_SIGN_IDENTITY:-Buildwright Self-Signed}"
+SIGN_HASH="$(security find-identity -p codesigning 2>/dev/null | grep -F "$SIGN_IDENTITY" | head -1 | awk '{print $2}')"
+if [ -n "$SIGN_HASH" ]; then
+  codesign --force --deep --sign "$SIGN_HASH" "$APP"
+  echo "Signed with stable identity $SIGN_IDENTITY ($SIGN_HASH) -- TCC grants persist across updates."
+else
+  codesign --force --deep --sign - "$APP"
+  echo "WARNING: ad-hoc signed. Privacy permissions will reset every update."
+  echo "         Run Scripts/make-signing-cert.sh once, then rebuild, to make them stick."
+fi
 
 echo "Built $APP"
 

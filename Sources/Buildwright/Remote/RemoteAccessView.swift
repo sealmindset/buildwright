@@ -286,6 +286,7 @@ struct SettingsView: View {
                 Text("Tests run in the worktree before every merge (red = blocked, override available). The probe's non-empty output files a P1 breakfix item with the evidence attached. Backlog category: which board category this workspace claims (empty = the workspace name); the sidebar hides other workspaces' categories unless \"all\" is checked.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            PermissionsSection(permissions: app.permissions)
             Section("Backlog planning") {
                 Toggle("Plan the backlog automatically at launch",
                        isOn: Binding(
@@ -362,5 +363,86 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .padding()
+    }
+}
+
+/// "Pre-authorize before AFK": shows each privacy grant's status and a button
+/// to trigger the prompt on your terms. macOS won't let the app self-approve
+/// (by design) — these just surface and prime the prompts so nothing blocks
+/// while you're away. Grants persist across updates only with a stable
+/// signing identity (Scripts/make-signing-cert.sh).
+struct PermissionsSection: View {
+    @ObservedObject var permissions: PermissionsManager
+
+    var body: some View {
+        Section("Permissions (pre-authorize for AFK)") {
+            row(title: "Automation (access data from other apps)",
+                detail: "CVR window tiling + notifications send Apple Events to System Events.",
+                state: permissions.automation,
+                action: { permissions.primeAutomation() },
+                openSettings: { permissions.openAutomationSettings() })
+
+            row(title: "Accessibility",
+                detail: "Positioning other apps' windows (CVR docking) goes through System Events.",
+                state: permissions.accessibility,
+                action: { permissions.primeAccessibility() },
+                openSettings: { permissions.openAccessibilitySettings() })
+
+            HStack {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Notifications").font(.system(size: 12, weight: .medium))
+                    Text("AFK pings (needs-you / done / incident) deliver here.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Send test") { permissions.sendTestNotification() }
+                    .controlSize(.small)
+                Button("Open Settings") { permissions.openNotificationSettings() }
+                    .controlSize(.small)
+            }
+
+            HStack {
+                Button("Re-check all") { permissions.refresh() }
+                    .controlSize(.small)
+                Spacer()
+                Button("Prime all prompts now") {
+                    permissions.primeAutomation()
+                    permissions.primeAccessibility()
+                }
+                .controlSize(.small)
+                .help("Trigger each prompt so you approve on your terms before going AFK")
+            }
+            Text("macOS won't let Buildwright approve its own prompts — that's the sandbox. These surface and trigger them so you decide. A one-time Allow persists across updates only when the app is signed with a stable identity (run Scripts/make-signing-cert.sh once); ad-hoc builds re-ask every update.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func row(title: String, detail: String, state: PermissionState,
+                     action: @escaping () -> Void, openSettings: @escaping () -> Void) -> some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 6) {
+                    Text(title).font(.system(size: 12, weight: .medium))
+                    statusChip(state)
+                }
+                Text(detail).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            if state == .denied {
+                Button("Open Settings", action: openSettings).controlSize(.small)
+            } else if !state.ok {
+                Button("Grant…", action: action).controlSize(.small)
+            }
+        }
+    }
+
+    private func statusChip(_ state: PermissionState) -> some View {
+        let color: Color = state == .granted ? .green : (state == .denied ? .red : .orange)
+        return Text(state.label)
+            .font(.system(size: 9, weight: .bold))
+            .padding(.horizontal, 5).padding(.vertical, 1)
+            .background(color.opacity(0.18))
+            .foregroundStyle(color)
+            .clipShape(Capsule())
     }
 }

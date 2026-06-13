@@ -61,10 +61,11 @@ final class ScrumMaster: ObservableObject {
         let model = self.model
         let turn = "\(context)\n\nQUESTION FROM THE TEAM:\n\(q)"
         let cwd = Config.backlogDirectory.path
+        let systemPrompt = Self.systemPrompt
         DispatchQueue.global(qos: .userInitiated).async {
             var args = ["claude", "-p", turn, "--output-format", "json",
                         "--allowedTools", "Read,Glob,Grep",
-                        "--append-system-prompt", Self.systemPrompt]
+                        "--append-system-prompt", systemPrompt]
             if !model.isEmpty { args += ["--model", model] }
             if let resume { args += ["--resume", resume] }
             let result = ShellExec.run(args, cwd: cwd)
