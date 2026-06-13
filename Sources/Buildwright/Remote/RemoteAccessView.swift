@@ -238,6 +238,17 @@ struct SettingsView: View {
     private var generalTab: some View {
         Form {
             Section("Claude Code") {
+                Picker("Model", selection: Binding(
+                    get: { app.claudeModel },
+                    set: { app.claudeModel = $0 }
+                )) {
+                    ForEach(AppState.modelChoices, id: \.id) { choice in
+                        Text(choice.label).tag(choice.id)
+                    }
+                }
+                .fixedSize()
+                Text("Passed as --model to every claude invocation — new panes and the headless planner/groomer. Opus 4.8 is the safe default; Fable 5 is currently unavailable for headless runs. Existing panes keep the model they started with.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Toggle("Skip permission prompts (--dangerously-skip-permissions)",
                        isOn: Binding(
                         get: { app.claudeSkipPermissions },

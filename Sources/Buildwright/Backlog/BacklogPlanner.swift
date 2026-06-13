@@ -60,6 +60,9 @@ final class BacklogPlanner: ObservableObject {
     @Published var plan: BacklogPlan?
     /// Reports the dollar cost of each headless run (AI-spend tracking).
     var onCost: ((Double) -> Void)?
+    /// Model id for `claude --model` (e.g. "claude-opus-4-8"). Empty = the
+    /// Claude Code default. Kept in sync with the app-wide model setting.
+    var model = ""
 
     var planJSONFile: URL { Config.backlogDirectory.appendingPathComponent(".plan.json") }
     var planMarkdownFile: URL { Config.backlogDirectory.appendingPathComponent("PLAN.md") }
@@ -125,12 +128,12 @@ final class BacklogPlanner: ObservableObject {
             """
         }
         let cwd = Config.backlogDirectory.path
+        let model = self.model
         DispatchQueue.global(qos: .userInitiated).async {
-            let result = ShellExec.run(
-                ["claude", "-p", prompt,
-                 "--output-format", "json",
-                 "--allowedTools", "Read,Glob,Grep"],
-                cwd: cwd)
+            var args = ["claude", "-p", prompt, "--output-format", "json",
+                        "--allowedTools", "Read,Glob,Grep"]
+            if !model.isEmpty { args += ["--model", model] }
+            let result = ShellExec.run(args, cwd: cwd)
             DispatchQueue.main.async {
                 MainActor.assumeIsolated { self.finish(result) }
             }
@@ -138,9 +141,20 @@ final class BacklogPlanner: ObservableObject {
     }
 
     private func finish(_ result: ShellResult) {
-        if let envelope = try? JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any],
-           let cost = envelope["total_cost_usd"] as? Double {
-            onCost?(cost)
+        let envelope = try? JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
+        if let cost = envelope?["total_cost_usd"] as? Double { onCost?(cost) }
+        // The CLI reports model unavailability / API errors as an envelope
+        // with is_error=true and the human message in `result` — often with
+        // a zero exit code. Surface that message verbatim instead of the
+        // generic "installed and logged in?" (which sent us hunting the
+        // wrong thing). The model-unavailable case names the model.
+        if envelope?["is_error"] as? Bool == true,
+           let msg = envelope?["result"] as? String, !msg.isEmpty {
+            state = .failed(TranscriptReader.condense(msg, limit: 240))
+            if notifyFailure {
+                ShellExec.notify(title: "Backlog plan failed", body: TranscriptReader.condense(msg, limit: 120))
+            }
+            return
         }
         guard result.ok else {
             let why = result.stderr.isEmpty ? "claude exited \(result.status) — is Claude Code installed and logged in?" : result.stderr

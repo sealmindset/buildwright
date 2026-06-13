@@ -72,11 +72,13 @@ final class AppState: ObservableObject {
             aiSpendMonth = saved.aiSpendMonth ?? ""
             dismissedDrift = Set(saved.dismissedDrift ?? [])
             lastDigestDate = saved.lastDigestDate ?? ""
+            if let m = saved.claudeModel { claudeModel = m }
             // DECISIONS.md era: upgrade an unmodified chat prompt in place.
             if saved.chatPrompt == AppState.legacyChatPrompt { chatPrompt = AppState.defaultChatPrompt }
         }
         planner.onCost = { [weak self] usd in self?.recordAISpend(usd) }
         groomer.onCost = { [weak self] usd in self?.recordAISpend(usd) }
+        applyClaudeModel() // push the loaded model into tmux/planner/groomer
         TerminalViewCache.shared.applyFontSize(CGFloat(terminalFontSize))
         // System-wide ⌥⌘B → app forward + Mission Control.
         NotificationCenter.default.addObserver(forName: .bwSummon, object: nil, queue: .main) { [weak self] _ in
@@ -191,7 +193,8 @@ final class AppState: ObservableObject {
             aiSpendUSD: aiSpendUSD,
             aiSpendMonth: aiSpendMonth,
             dismissedDrift: dismissedDrift.sorted(),
-            lastDigestDate: lastDigestDate
+            lastDigestDate: lastDigestDate,
+            claudeModel: claudeModel
         ))
     }
 
@@ -1626,6 +1629,27 @@ final class AppState: ObservableObject {
             tmux.claudeSkipPermissions = claudeSkipPermissions
             persist()
         }
+    }
+
+    /// Model id passed to every `claude` invocation (panes + headless
+    /// planner/groomer) via --model. Empty = Claude Code's own default.
+    /// Defaults to Opus 4.8 because Fable 5 is currently unavailable for
+    /// headless `-p` runs and silently broke the planner.
+    @Published var claudeModel: String = "claude-opus-4-8" {
+        didSet { applyClaudeModel() }
+    }
+
+    static let modelChoices: [(id: String, label: String)] = [
+        ("claude-opus-4-8", "Opus 4.8"),
+        ("claude-fable-5", "Fable 5"),
+        ("", "Claude Code default"),
+    ]
+
+    private func applyClaudeModel() {
+        tmux.claudeModel = claudeModel
+        planner.model = claudeModel
+        groomer.model = claudeModel
+        persist()
     }
 
     /// New browser panes start as private sessions (nothing saved to disk).

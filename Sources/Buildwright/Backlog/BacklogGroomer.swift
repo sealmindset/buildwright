@@ -60,6 +60,8 @@ final class BacklogGroomer: ObservableObject {
     @Published var state: State = .idle
     @Published var report: GroomReport?
     var onCost: ((Double) -> Void)?
+    /// Model id for `claude --model` (empty = Claude Code default).
+    var model = ""
 
     var reportFile: URL { Config.backlogDirectory.appendingPathComponent(".groom.json") }
 
@@ -90,12 +92,12 @@ final class BacklogGroomer: ObservableObject {
         state = .running(since: Date())
         let cwd = Config.backlogDirectory.path
         let prompt = Self.groomingPrompt(today: Self.todayString)
+        let model = self.model
         DispatchQueue.global(qos: .userInitiated).async {
-            let result = ShellExec.run(
-                ["claude", "-p", prompt,
-                 "--output-format", "json",
-                 "--allowedTools", "Read,Glob,Grep"],
-                cwd: cwd)
+            var args = ["claude", "-p", prompt, "--output-format", "json",
+                        "--allowedTools", "Read,Glob,Grep"]
+            if !model.isEmpty { args += ["--model", model] }
+            let result = ShellExec.run(args, cwd: cwd)
             DispatchQueue.main.async {
                 MainActor.assumeIsolated { self.finish(result) }
             }
@@ -103,9 +105,15 @@ final class BacklogGroomer: ObservableObject {
     }
 
     private func finish(_ result: ShellResult) {
-        if let envelope = try? JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any],
-           let cost = envelope["total_cost_usd"] as? Double {
-            onCost?(cost)
+        let envelope = try? JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
+        if let cost = envelope?["total_cost_usd"] as? Double { onCost?(cost) }
+        if envelope?["is_error"] as? Bool == true,
+           let msg = envelope?["result"] as? String, !msg.isEmpty {
+            state = .failed(TranscriptReader.condense(msg, limit: 240))
+            if notifyFailure {
+                ShellExec.notify(title: "Backlog grooming failed", body: TranscriptReader.condense(msg, limit: 120))
+            }
+            return
         }
         guard result.ok else {
             let why = result.stderr.isEmpty ? "claude exited \(result.status) — is Claude Code installed and logged in?" : result.stderr

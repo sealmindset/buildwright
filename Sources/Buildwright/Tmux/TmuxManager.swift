@@ -120,6 +120,10 @@ final class TmuxManager {
     /// Toggleable in Settings → General.
     var claudeSkipPermissions = true
 
+    /// Model id passed to `claude --model` for new panes (e.g.
+    /// "claude-opus-4-8"). Empty = let Claude Code pick its own default.
+    var claudeModel = ""
+
     /// Make sure the workspace's tmux session exists. Returns true if it was
     /// freshly created (no windows to reattach).
     @discardableResult
@@ -149,7 +153,8 @@ final class TmuxManager {
         case .shell:
             return nil // tmux default-shell (the user's login shell, zsh on macOS)
         case .claude:
-            let base = claudeSkipPermissions ? "claude --dangerously-skip-permissions" : "claude"
+            var base = claudeSkipPermissions ? "claude --dangerously-skip-permissions" : "claude"
+            if !claudeModel.isEmpty { base += " --model \(claudeModel)" }
             if let prompt {
                 // Single-quote the prompt for the shell, escaping embedded quotes.
                 let q = prompt.replacingOccurrences(of: "'", with: "'\\''")
