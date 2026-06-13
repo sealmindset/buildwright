@@ -145,6 +145,37 @@ struct PaneContainerView: View {
         pane.isTerminal ? termCache.runStates[pane.id] : nil
     }
 
+    /// Live size readout: what this pane renders at, and — when tmux disagrees
+    /// — what tmux thinks, in red with a one-click resync. Makes the drift
+    /// that scrambles full-screen pickers visible instead of mysterious.
+    @ViewBuilder
+    private var sizeChip: some View {
+        if let info = termCache.paneSizeInfo[pane.id] {
+            if info.drifted {
+                Button {
+                    termCache.resyncSize(pane.id)
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: "arrow.triangle.2.circlepath").font(.system(size: 8, weight: .bold))
+                        Text("\(info.viewLabel)≠\(info.tmuxLabel)")
+                            .font(.system(size: 9, design: .monospaced))
+                    }
+                    .foregroundStyle(.red)
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(Color.red.opacity(0.15))
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.borderless)
+                .help("Size drift — Claude is drawing for \(info.tmuxLabel) but this pane is \(info.viewLabel). Click to resync and rebuild.")
+            } else {
+                Text(info.viewLabel)
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                    .help("Pane size (columns × rows) — matches tmux")
+            }
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -233,6 +264,7 @@ struct PaneContainerView: View {
                 .help("Claude finished — mark this backlog item done")
             }
             if pane.isTerminal {
+                sizeChip
                 Button {
                     app.addDiffPane(reviewing: pane)
                 } label: {

@@ -12,6 +12,24 @@ import AppKit
 /// so any %output emitted before the capture's %end is, by construction, also
 /// contained in the capture itself — dropping it avoids duplicate lines, and
 /// nothing after the %end can be missed.
+/// What a pane renders at vs. what tmux thinks the window is. When these
+/// disagree, Claude draws for one size and SwiftTerm lays out at another —
+/// the scramble. `tmux*` is nil until tmux reports a size.
+struct PaneSizeInfo: Equatable {
+    var viewCols: Int
+    var viewRows: Int
+    var tmuxCols: Int?
+    var tmuxRows: Int?
+
+    /// True only when we positively know tmux disagrees with the view.
+    var drifted: Bool {
+        guard let tc = tmuxCols, let tr = tmuxRows else { return false }
+        return tc != viewCols || tr != viewRows
+    }
+    var viewLabel: String { "\(viewCols)×\(viewRows)" }
+    var tmuxLabel: String { tmuxCols.map { "\($0)×\(tmuxRows ?? 0)" } ?? "—" }
+}
+
 final class ControlModeTerminalView: TerminalView, TerminalViewDelegate {
     let paneID: String
     let windowID: String
@@ -43,9 +61,31 @@ final class ControlModeTerminalView: TerminalView, TerminalViewDelegate {
         lastTmuxResizeAt = Date()
     }
 
-    /// Push the view's real size to tmux when anything drifted. External
-    /// clients (iPad) win while they're actively resizing — we only reclaim
-    /// after 10s of layout silence so we never fight a live remote session.
+    /// Live size snapshot for the header readout: what THIS view renders vs.
+    /// what tmux last told us the window is. When they disagree, full-screen
+    /// TUIs (Claude's pickers) scramble — now visible instead of mysterious.
+    var sizeInfo: PaneSizeInfo {
+        let t = getTerminal()
+        return PaneSizeInfo(viewCols: t.cols, viewRows: t.rows,
+                            tmuxCols: tmuxCols, tmuxRows: tmuxRows)
+    }
+
+    /// Force this pane back into agreement: push the real view size to tmux
+    /// and rebuild the display from tmux truth (clears any scrambled frame).
+    /// Wired to the header's size chip so you can fix drift in one click.
+    func forceResync() {
+        guard window != nil, control?.isAlive == true else { return }
+        lastSentCols = 0; lastSentRows = 0 // defeat the "already sent" guard
+        let t = getTerminal()
+        if t.cols > 1, t.rows > 1 { sendSize(cols: t.cols, rows: t.rows) }
+        refreshFromTmux()
+    }
+
+    /// Push the view's real size to tmux when anything drifted. Under
+    /// `window-size manual` with one control client, THIS app is the sole
+    /// size authority, so we reclaim drift fast (3s) rather than the old 10s
+    /// courtesy — a window left at a stale size is exactly what scrambles a
+    /// full-screen picker, and there's no other client to fight.
     /// Detached views (tab switched away, mid-teardown) never drive sizes:
     /// their frames pass through garbage during SwiftUI animations.
     func reconcileSize() {
@@ -55,7 +95,7 @@ final class ControlModeTerminalView: TerminalView, TerminalViewDelegate {
         guard t.cols > 1, t.rows > 1 else { return }
         let viewChanged = t.cols != lastSentCols || t.rows != lastSentRows
         let tmuxDrifted = (tmuxCols != nil && (tmuxCols != t.cols || tmuxRows != t.rows))
-            && Date().timeIntervalSince(lastTmuxResizeAt) > 10
+            && Date().timeIntervalSince(lastTmuxResizeAt) > 3
         guard viewChanged || tmuxDrifted else { return }
         sendSize(cols: t.cols, rows: t.rows)
     }
@@ -203,6 +243,8 @@ final class ControlModeTerminalView: TerminalView, TerminalViewDelegate {
         // them resizes the real pty and corrupts every TUI in the pane.
         guard window != nil else { return }
         sendSize(cols: newCols, rows: newRows)
+        // Surface the new size immediately (don't wait for the 2s tick).
+        TerminalViewCache.shared.refreshSizeInfo()
     }
 
     func setTerminalTitle(source: TerminalView, title: String) {}
@@ -243,6 +285,24 @@ final class TerminalViewCache: ObservableObject {
     /// Pane UUID → lifecycle state; only non-running states are stored.
     @Published private(set) var runStates: [UUID: PaneRunState] = [:]
 
+    /// Pane UUID → live size (view vs tmux), for the header readout. Lets you
+    /// SEE size drift the moment it happens instead of guessing at scramble.
+    @Published private(set) var paneSizeInfo: [UUID: PaneSizeInfo] = [:]
+
+    /// Rebuild the size readout from every live view. Cheap (a handful of
+    /// panes); called on the reconcile tick and right after a resize.
+    func refreshSizeInfo() {
+        var info: [UUID: PaneSizeInfo] = [:]
+        for (id, view) in views { info[id] = view.sizeInfo }
+        if info != paneSizeInfo { paneSizeInfo = info }
+    }
+
+    /// Force one pane back into size agreement (header chip action).
+    func resyncSize(_ paneID: UUID) {
+        views[paneID]?.forceResync()
+        refreshSizeInfo()
+    }
+
     private var views: [UUID: ControlModeTerminalView] = [:]
     private var paneIDToView: [String: UUID] = [:]   // tmux %pane-id → pane UUID
     private var windowIDToView: [String: UUID] = [:] // tmux @window-id → pane UUID
@@ -278,11 +338,11 @@ final class TerminalViewCache: ObservableObject {
         // Size reconciler: converge tmux window sizes to what views actually
         // render. Catches resize events lost in SwiftUI layout churn (the
         // off-by-a-few-columns wrap bug) within seconds, forever.
-        Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
+        Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
             Task { @MainActor in
-                for view in TerminalViewCache.shared.views.values {
-                    view.reconcileSize()
-                }
+                let cache = TerminalViewCache.shared
+                for view in cache.views.values { view.reconcileSize() }
+                cache.refreshSizeInfo()
             }
         }
     }
