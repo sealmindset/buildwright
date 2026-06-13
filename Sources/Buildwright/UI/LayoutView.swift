@@ -9,7 +9,9 @@ struct LayoutView: View {
     /// Path of child indices from the layout root to this node (for resize).
     let path: [Int]
 
-    private let dividerThickness: CGFloat = 5
+    // A roomy 12pt gutter is the grab zone; the visible line inside stays
+    // slim until hovered (see DividerHandle).
+    private let dividerThickness: CGFloat = 12
 
     var body: some View {
         switch node {
@@ -43,10 +45,16 @@ struct LayoutView: View {
                 }
             }
             if idx < children.count - 1 {
-                DividerHandle(axis: axis) { delta in
-                    let fraction = Double(delta / max(totalExtent, 1))
-                    app.resizeLayout(tabID: tab.id, splitPath: path, dividerIndex: idx, delta: fraction)
-                }
+                DividerHandle(
+                    axis: axis,
+                    onDrag: { delta in
+                        let fraction = Double(delta / max(totalExtent, 1))
+                        app.resizeLayout(tabID: tab.id, splitPath: path, dividerIndex: idx, delta: fraction)
+                    },
+                    onEqualize: {
+                        app.equalizeDivider(tabID: tab.id, splitPath: path, dividerIndex: idx)
+                    }
+                )
             }
         }
         if axis == .horizontal {
@@ -57,39 +65,69 @@ struct LayoutView: View {
     }
 }
 
+/// The grab gutter between two panes. The whole 12pt zone is draggable (so
+/// it's easy to catch), but the visible mark stays a slim line until you
+/// hover — then it thickens and shows a grip so it's obviously grabbable.
+/// Double-click evens out the two neighbours.
 struct DividerHandle: View {
     let axis: SplitAxis
     let onDrag: (CGFloat) -> Void
+    let onEqualize: () -> Void
     @State private var hovering = false
+    @State private var dragging = false
+    @State private var lastDelta: CGFloat = 0
+
+    private var active: Bool { hovering || dragging }
 
     var body: some View {
-        Rectangle()
-            .fill(hovering ? Color.accentColor.opacity(0.5) : Color.black.opacity(0.25))
-            .frame(width: axis == .horizontal ? 5 : nil,
-                   height: axis == .vertical ? 5 : nil)
-            .contentShape(Rectangle())
-            .onHover { h in
-                hovering = h
-                if h {
-                    (axis == .horizontal ? NSCursor.resizeLeftRight : NSCursor.resizeUpDown).push()
-                } else {
-                    NSCursor.pop()
+        ZStack {
+            // Invisible grab zone: the full gutter, always hit-testable.
+            Color.clear.contentShape(Rectangle())
+            // Visible line — slim normally, thicker + tinted when active.
+            RoundedRectangle(cornerRadius: 1)
+                .fill(active ? Color.accentColor.opacity(0.7) : Color.primary.opacity(0.14))
+                .frame(width: axis == .horizontal ? (active ? 4 : 1.5) : nil,
+                       height: axis == .vertical ? (active ? 4 : 1.5) : nil)
+            // Grip dots, revealed on hover/drag.
+            if active { grip }
+        }
+        .frame(width: axis == .horizontal ? 12 : nil,
+               height: axis == .vertical ? 12 : nil)
+        .onHover { h in
+            hovering = h
+            if h { (axis == .horizontal ? NSCursor.resizeLeftRight : NSCursor.resizeUpDown).push() }
+            else { NSCursor.pop() }
+        }
+        .gesture(
+            DragGesture(minimumDistance: 1)
+                .onChanged { value in
+                    dragging = true
+                    let delta = axis == .horizontal ? value.translation.width : value.translation.height
+                    let inc = delta - lastDelta // incremental: subtract what we already applied
+                    lastDelta = delta
+                    onDrag(inc)
                 }
-            }
-            .gesture(
-                DragGesture(minimumDistance: 1)
-                    .onChanged { value in
-                        let delta = axis == .horizontal ? value.translation.width : value.translation.height
-                        // Deliver incremental deltas: subtract what we already applied.
-                        let inc = delta - lastDelta
-                        lastDelta = delta
-                        onDrag(inc)
-                    }
-                    .onEnded { _ in lastDelta = 0 }
-            )
+                .onEnded { _ in lastDelta = 0; dragging = false }
+        )
+        .onTapGesture(count: 2) { onEqualize() }
+        .help("Drag to resize · double-click to even out")
     }
 
-    @State private var lastDelta: CGFloat = 0
+    /// Three dots along the divider — a column for a left/right split, a row
+    /// for a top/bottom split.
+    @ViewBuilder
+    private var grip: some View {
+        let dots = ForEach(0..<3, id: \.self) { _ in
+            Circle().fill(Color.white.opacity(0.9)).frame(width: 2.5, height: 2.5)
+        }
+        Group {
+            if axis == .horizontal {
+                VStack(spacing: 2.5) { dots }
+            } else {
+                HStack(spacing: 2.5) { dots }
+            }
+        }
+    }
 }
 
 /// Pane chrome: a slim header (icon, title, Claude status, close) above the content.

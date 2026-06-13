@@ -1362,6 +1362,17 @@ final class AppState: ObservableObject {
         persist()
     }
 
+    /// Double-click a divider: even out the two panes on either side of it.
+    func equalizeDivider(tabID: UUID, splitPath: [Int], dividerIndex: Int) {
+        guard let wi = activeWorkspaceIndex,
+              let ti = workspaces[wi].tabs.firstIndex(where: { $0.id == tabID }),
+              let layout = workspaces[wi].tabs[ti].layout else { return }
+        withAnimation(.easeInOut(duration: 0.15)) {
+            workspaces[wi].tabs[ti].layout = layout.equalizingPair(splitPath: splitPath, dividerIndex: dividerIndex)
+        }
+        persist()
+    }
+
     // MARK: Browser tabs
 
     private func withPane(_ paneID: UUID, _ body: (inout Pane) -> Void) {

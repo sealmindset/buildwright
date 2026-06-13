@@ -189,4 +189,22 @@ indirect enum LayoutNode: Codable, Equatable {
         children[head] = children[head].resizing(splitPath: Array(splitPath.dropFirst()), dividerIndex: dividerIndex, delta: delta)
         return .split(axis: axis, children: children, fractions: fractions)
     }
+
+    /// Split the combined share of the two panes flanking `dividerIndex`
+    /// evenly between them, leaving every other pane in the row untouched —
+    /// the double-click-to-even-out gesture.
+    func equalizingPair(splitPath: [Int], dividerIndex: Int) -> LayoutNode {
+        guard case .split(let axis, var children, var fractions) = self else { return self }
+        if splitPath.isEmpty {
+            guard dividerIndex >= 0, dividerIndex + 1 < fractions.count else { return self }
+            let combined = fractions[dividerIndex] + fractions[dividerIndex + 1]
+            fractions[dividerIndex] = combined / 2
+            fractions[dividerIndex + 1] = combined / 2
+            return .split(axis: axis, children: children, fractions: fractions)
+        }
+        let head = splitPath[0]
+        guard head >= 0, head < children.count else { return self }
+        children[head] = children[head].equalizingPair(splitPath: Array(splitPath.dropFirst()), dividerIndex: dividerIndex)
+        return .split(axis: axis, children: children, fractions: fractions)
+    }
 }
