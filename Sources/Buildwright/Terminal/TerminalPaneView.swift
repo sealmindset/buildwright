@@ -70,6 +70,17 @@ final class ControlModeTerminalView: TerminalView, TerminalViewDelegate {
                             tmuxCols: tmuxCols, tmuxRows: tmuxRows)
     }
 
+    /// Called once the view is attached with its real frame: assert the size
+    /// to tmux FIRST, then capture for replay. Both commands ride the single
+    /// serial control connection, and tmux reflows synchronously, so the
+    /// capture comes back already at the correct width — the initial paint is
+    /// clean instead of a wrong-width flash that converges a beat later.
+    func attachAndReplay() {
+        guard window != nil, control?.isAlive == true else { return }
+        assertSizeNow()    // refresh-client -C @id:WxH  (sent first)
+        refreshFromTmux()  // capture-pane ...           (sent after → correct size)
+    }
+
     /// Assert the view's real size to tmux NOW, bypassing the replay guard.
     /// Called the moment the pane attaches so tmux reflows the pane to the
     /// width we actually display BEFORE content is captured/redrawn — the
@@ -447,7 +458,10 @@ final class TerminalViewCache: ObservableObject {
         windowIDToView[windowID] = pane.id
         runStates.removeValue(forKey: pane.id)
 
-        startReplay(for: tv)
+        // NB: the initial replay is intentionally NOT started here. It's
+        // started by makeNSView via attachAndReplay() AFTER the view is
+        // attached and its real size is asserted to tmux — so the first
+        // capture comes back already at the correct width (no startup flash).
         return tv
     }
 
@@ -600,13 +614,10 @@ struct TerminalPaneView: NSViewRepresentable {
             tv.frame = container.bounds
             tv.autoresizingMask = [.width, .height]
             container.addSubview(tv)
-            // Now attached with the real frame: assert that size to tmux at
-            // once (so the pane is the width we display BEFORE anything is
-            // captured/drawn), then rebuild clean once the frame settles.
-            DispatchQueue.main.async {
-                tv.assertSizeNow()
-                tv.scheduleCleanRedraw(after: 0.35)
-            }
+            // Now attached with the real frame: size tmux first, THEN capture
+            // for the initial replay (serial connection + synchronous tmux
+            // reflow → first paint is already correct-width, no flash).
+            DispatchQueue.main.async { tv.attachAndReplay() }
         } else {
             let label = NSTextField(labelWithString: "tmux unavailable — install tmux and reopen this pane")
             label.frame = container.bounds
