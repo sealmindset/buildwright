@@ -268,9 +268,29 @@ final class ControlModeTerminalView: TerminalView, TerminalViewDelegate {
         feed(text: "\u{1b}[\(y + 1);\(x + 1)H")
     }
 
+    /// Activity tracking for idle-convergence (below).
+    private(set) var lastOutputAt = Date()
+    private var convergedSinceIdle = false
+
     func deliver(bytes: [UInt8]) {
         guard !awaitingHistory else { return } // contained in pending capture
+        lastOutputAt = Date()
+        convergedSinceIdle = false
         feed(byteArray: bytes[...])
+    }
+
+    /// Once a pane has been quiet for a few seconds, rebuild its display from
+    /// tmux's buffer (the proven source of truth). Live in-place redraws can
+    /// leave a few stale cells in SwiftTerm that tmux's own buffer doesn't
+    /// have (the residual fragments after Claude's spinners/rules); a quiet
+    /// pane has nothing streaming, so this snaps it back to truth invisibly.
+    /// Fires at most once per idle period — no repeated refreshing.
+    func convergeIfIdle() {
+        guard window != nil, control?.isAlive == true, !awaitingHistory,
+              !convergedSinceIdle,
+              Date().timeIntervalSince(lastOutputAt) > 4 else { return }
+        convergedSinceIdle = true
+        refreshFromTmux()
     }
 
     /// Input bypassing broadcast fan-out (used BY the fan-out).
@@ -394,7 +414,10 @@ final class TerminalViewCache: ObservableObject {
         Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
             Task { @MainActor in
                 let cache = TerminalViewCache.shared
-                for view in cache.views.values { view.reconcileSize() }
+                for view in cache.views.values {
+                    view.reconcileSize()
+                    view.convergeIfIdle()
+                }
                 cache.refreshSizeInfo()
             }
         }
