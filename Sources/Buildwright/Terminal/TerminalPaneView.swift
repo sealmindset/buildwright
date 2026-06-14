@@ -116,7 +116,10 @@ final class ControlModeTerminalView: TerminalView, TerminalViewDelegate {
     /// their frames pass through garbage during SwiftUI animations.
     func reconcileSize() {
         guard window != nil else { return }
-        guard control?.isAlive == true, !awaitingHistory else { return }
+        // Keep size synced even mid-replay: a pane that stalled in replay
+        // (e.g. exited mid-capture) must not freeze tmux at a stale/garbage
+        // size forever — that was how a glitch 519 could stick.
+        guard control?.isAlive == true else { return }
         let t = getTerminal()
         guard t.cols > 1, t.rows > 1 else { return }
         let viewChanged = t.cols != lastSentCols || t.rows != lastSentRows
@@ -127,9 +130,30 @@ final class ControlModeTerminalView: TerminalView, TerminalViewDelegate {
     }
 
     private func sendSize(cols: Int, rows: Int) {
-        lastSentCols = cols
-        lastSentRows = rows
-        control?.setWindowSize(windowID: windowID, cols: cols, rows: rows)
+        // A pane can't be larger than the window it lives in. SwiftUI layout
+        // churn / teardown frames have produced absurd sizes (519 cols — wider
+        // than any screen), which tmux then renders at, wrapping every line
+        // into the scramble. Clamp to what the window physically holds, using
+        // the real cell size, so a glitch frame can never poison tmux.
+        let (c, r) = Self.clamp(cols: cols, rows: rows, toWindowOf: self, font: font)
+        guard c > 1, r > 1 else { return }
+        lastSentCols = c
+        lastSentRows = r
+        control?.setWindowSize(windowID: windowID, cols: c, rows: r)
+    }
+
+    /// Cap (cols,rows) to the host window's content capacity (falls back to the
+    /// main screen when detached). Generous +2 slack so a legitimately
+    /// full-window pane is never trimmed; only garbage frames get clamped.
+    static func clamp(cols: Int, rows: Int, toWindowOf view: NSView, font: NSFont) -> (Int, Int) {
+        let cw = max(3, ("W" as NSString).size(withAttributes: [.font: font]).width)
+        let ch = max(6, font.boundingRectForFont.height)
+        let bound = view.window?.contentLayoutRect.size
+            ?? NSScreen.main?.frame.size
+            ?? CGSize(width: 1440, height: 900)
+        let maxCols = max(20, Int(bound.width / cw) + 2)
+        let maxRows = max(8, Int(bound.height / ch) + 2)
+        return (min(cols, maxCols), min(rows, maxRows))
     }
 
     init(frame: CGRect, paneID: String, windowID: String, control: TmuxControlClient) {
