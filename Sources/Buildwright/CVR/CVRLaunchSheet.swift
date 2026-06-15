@@ -16,8 +16,12 @@ struct CVRLaunchSheet: View {
     @State private var dockSide = "right"
     @State private var autoDock = true
 
+    /// Installed CVR plugin path (preferred — self-contained), if present.
+    private var cvrPluginPath: String? { PluginManager.shared.plugin(named: "cvr")?.path.path }
+
     private var cvrExists: Bool {
-        FileManager.default.fileExists(atPath: app.cvrPath + "/record.ts")
+        if let p = cvrPluginPath, FileManager.default.fileExists(atPath: p + "/src/record.ts") { return true }
+        return FileManager.default.fileExists(atPath: app.cvrPath + "/record.ts") // legacy fallback
     }
 
     var body: some View {
@@ -27,7 +31,7 @@ struct CVRLaunchSheet: View {
                 .font(.caption).foregroundStyle(.secondary)
 
             if !cvrExists {
-                Label("CVR not found at \(app.cvrPath) — set the path in Settings → CVR", systemImage: "exclamationmark.triangle")
+                Label("CVR not found — install the CVR plugin in Settings → Plugins (or set a path in Settings → CVR)", systemImage: "exclamationmark.triangle")
                     .font(.caption).foregroundStyle(.orange)
             }
 
@@ -69,13 +73,36 @@ struct CVRLaunchSheet: View {
     }
 
     private func launch() {
-        var cmd = "npx tsx record.ts --url \(shellQuote(url)) --label \(shellQuote(label)) --env \(shellQuote(env))"
+        // Interlink: run CVR in the INITIATING workspace's context and write
+        // captures into that workspace, so a recording belongs to the project
+        // the calling terminal is in.
+        let ws = app.activeWorkspace
+        var initiatingDir = ws?.baseRepo ?? app.cvrPath
+        if let tab = ws?.activeTab, let pid = tab.focusedPaneID,
+           let p = tab.pane(pid), !p.directory.isEmpty {
+            initiatingDir = p.directory
+        }
+        let capturesDir = initiatingDir + "/cvr-captures"
+
+        // Prefer the installed, self-contained plugin (agent-callable CLI, abs
+        // path so cwd can be the workspace); fall back to the legacy path.
+        var cmd: String
+        let paneDir: String
+        if let plugin = cvrPluginPath {
+            cmd = "node \(shellQuote(plugin + "/bin/cvr.mjs")) record"
+            paneDir = initiatingDir
+        } else {
+            cmd = "npx tsx record.ts"
+            paneDir = app.cvrPath
+        }
+        cmd += " --url \(shellQuote(url)) --label \(shellQuote(label)) --env \(shellQuote(env)) --captures-dir \(shellQuote(capturesDir))"
         if !user.isEmpty { cmd += " --user \(shellQuote(user))" }
-        // Run inside a shell pane so output (and the finish flow) is visible.
-        app.addPane(kind: .shell, axis: .horizontal, directory: app.cvrPath,
+
+        // Run inside a shell pane (in the workspace) so output + finish flow are
+        // visible right where the work is — status streams back to the pane.
+        app.addPane(kind: .shell, axis: .horizontal, directory: paneDir,
                     title: "cvr: \(label)")
-        // Type the command into the new pane via tmux send-keys.
-        if let ws = app.activeWorkspace, let tab = ws.activeTab,
+        if let ws2 = app.activeWorkspace, let tab = ws2.activeTab,
            let paneID = tab.focusedPaneID, let pane = tab.pane(paneID),
            let windowID = pane.tmuxWindowID {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
