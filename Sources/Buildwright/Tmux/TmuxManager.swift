@@ -110,6 +110,10 @@ final class TmuxManager {
             }
         case .layoutChange(let windowID, let cols, let rows):
             TerminalViewCache.shared.tmuxResized(windowID: windowID, cols: cols, rows: rows)
+        case .paused(let paneID):
+            TerminalViewCache.shared.flowPaused(paneID: paneID)
+        case .continued(let paneID):
+            TerminalViewCache.shared.flowContinued(paneID: paneID)
         case .windowRenamed:
             break
         }

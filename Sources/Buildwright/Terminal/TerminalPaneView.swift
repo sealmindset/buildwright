@@ -232,6 +232,8 @@ final class ControlModeTerminalView: TerminalView, TerminalViewDelegate {
     /// buffer, and replay from tmux's current truth.
     func rebind(to newControl: TmuxControlClient) {
         control = newControl
+        flowPaused = false          // a fresh control client starts unpaused
+        flowConfirmedPaused = false
         refreshFromTmux()
     }
 
@@ -243,6 +245,7 @@ final class ControlModeTerminalView: TerminalView, TerminalViewDelegate {
         awaitingHistory = true
         replayStartedAt = Date()
         pendingFeed.removeAll(keepingCapacity: true) // stale pre-reset bytes
+        continueFlowIfPaused()                       // don't replay into a paused pane
         getTerminal().resetToInitialState()
         TerminalViewCache.shared.startReplay(for: self)
     }
@@ -298,11 +301,27 @@ final class ControlModeTerminalView: TerminalView, TerminalViewDelegate {
     /// the next turn. Large enough never to throttle normal interactive output.
     private static let maxFeedPerFlush = 128 * 1024
 
+    /// Render budget / backpressure (E46-S2). Coalescing (above) keeps the UI
+    /// live, but a sustained firehose would still grow `pendingFeed` without
+    /// bound — a memory leak under flood, because draining the control pipe
+    /// into our buffer hides the backlog from tmux's own flow control. So when
+    /// the buffer passes the high-water mark we ask tmux to PAUSE this pane
+    /// (it buffers + replays on continue, no data lost) and CONTINUE once we've
+    /// drained below the low-water mark. Hysteresis avoids pause/continue
+    /// thrash; this stops a runaway agent at the source.
+    private static let feedHighWater = 1 * 1024 * 1024   // pause above 1 MB buffered
+    private static let feedLowWater  = 256 * 1024        // resume below 256 KB
+    /// Our intent (authoritative for behavior): have we asked tmux to pause?
+    private(set) var flowPaused = false
+    /// tmux's confirmation via %pause/%continue (diagnostics / health panel).
+    private(set) var flowConfirmedPaused = false
+
     func deliver(bytes: [UInt8]) {
         guard !awaitingHistory else { return } // contained in pending capture
         lastOutputAt = Date()
         convergedSinceIdle = false
         pendingFeed.append(contentsOf: bytes)
+        if !flowPaused, pendingFeed.count >= Self.feedHighWater { requestFlowPause() }
         scheduleFeedFlush()
     }
 
@@ -324,8 +343,24 @@ final class ControlModeTerminalView: TerminalView, TerminalViewDelegate {
         let n = min(pendingFeed.count, Self.maxFeedPerFlush)
         feed(byteArray: pendingFeed[0..<n])
         pendingFeed.removeFirst(n)
+        if flowPaused, pendingFeed.count <= Self.feedLowWater { requestFlowContinue() }
         if !pendingFeed.isEmpty { scheduleFeedFlush() } // more than a frame queued
     }
+
+    private func requestFlowPause() {
+        flowPaused = true
+        control?.setPaneFlow(paneID: paneID, state: "pause")
+    }
+    private func requestFlowContinue() {
+        flowPaused = false
+        control?.setPaneFlow(paneID: paneID, state: "continue")
+    }
+    /// Best-effort resume so a removed/refreshed pane isn't left paused
+    /// server-side (a remote/iPad client would otherwise see it frozen).
+    func continueFlowIfPaused() { if flowPaused { requestFlowContinue() } }
+    /// tmux's pause/continue confirmation (observability only; behavior is
+    /// driven by our own intent above to stay race-free).
+    func noteFlowConfirmed(paused: Bool) { flowConfirmedPaused = paused }
 
     /// Once a pane has been quiet for a few seconds, rebuild its display from
     /// tmux's buffer (the proven source of truth). Live in-place redraws can
@@ -532,6 +567,17 @@ final class TerminalViewCache: ObservableObject {
         view.deliver(bytes: bytes)
     }
 
+    /// tmux confirmed it paused/continued a pane (flow control). Behavior is
+    /// driven by the view's own render budget; these just record tmux's truth.
+    func flowPaused(paneID: String) {
+        guard let id = paneIDToView[paneID], let view = views[id] else { return }
+        view.noteFlowConfirmed(paused: true)
+    }
+    func flowContinued(paneID: String) {
+        guard let id = paneIDToView[paneID], let view = views[id] else { return }
+        view.noteFlowConfirmed(paused: false)
+    }
+
     func windowClosed(windowID: String) {
         guard let id = windowIDToView[windowID] else { return }
         runStates[id] = .exited
@@ -568,6 +614,7 @@ final class TerminalViewCache: ObservableObject {
     func remove(_ paneID: UUID) {
         runStates.removeValue(forKey: paneID)
         guard let view = views.removeValue(forKey: paneID) else { return }
+        view.continueFlowIfPaused() // never leave a pane paused for other clients
         paneIDToView.removeValue(forKey: view.paneID)
         windowIDToView.removeValue(forKey: view.windowID)
     }
@@ -619,6 +666,7 @@ final class TerminalViewCache: ObservableObject {
             let t = view.getTerminal()
             return "pane \(id.uuidString.prefix(8)) win=\(view.windowID) tmuxPane=\(view.paneID) " +
                    "viewCols=\(t.cols)x\(t.rows) attached=\(view.window != nil) " +
+                   "flow=\(view.flowPaused ? "paused" : "ok") " +
                    "state=\(runStates[id].map(String.init(describing:)) ?? "running")"
         }.sorted()
     }
