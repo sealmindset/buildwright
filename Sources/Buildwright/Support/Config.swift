@@ -42,6 +42,15 @@ enum Config {
     /// Default location of the CVR tool; configurable in Settings.
     static let defaultCVRPath = NSString(string: "~/Documents/GitHub/docai/tools/cvr").expandingTildeInPath
 
+    /// Where installed tool plugins are cloned (one subdirectory per plugin,
+    /// each with a plugin.json manifest). See PluginManager.
+    static var pluginsDirectory: URL {
+        if let override = ProcessInfo.processInfo.environment["BUILDWRIGHT_PLUGINS_DIR"] {
+            return URL(fileURLWithPath: override, isDirectory: true)
+        }
+        return home.appendingPathComponent(".buildwright/plugins", isDirectory: true)
+    }
+
     /// Prefix for hidden per-pane grouped tmux sessions.
     static let groupedSessionPrefix = "_bw-"
 

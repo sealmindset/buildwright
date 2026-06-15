@@ -188,6 +188,8 @@ struct SettingsView: View {
                 .tabItem { Label("Templates", systemImage: "wand.and.stars") }
             cvrTab
                 .tabItem { Label("CVR", systemImage: "record.circle") }
+            PluginsView()
+                .tabItem { Label("Plugins", systemImage: "puzzlepiece.extension") }
         }
         .frame(width: 620, height: 480)
     }
