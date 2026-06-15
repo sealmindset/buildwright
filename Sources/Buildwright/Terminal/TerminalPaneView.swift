@@ -242,6 +242,7 @@ final class ControlModeTerminalView: TerminalView, TerminalViewDelegate {
         guard control?.isAlive == true else { return }
         awaitingHistory = true
         replayStartedAt = Date()
+        pendingFeed.removeAll(keepingCapacity: true) // stale pre-reset bytes
         getTerminal().resetToInitialState()
         TerminalViewCache.shared.startReplay(for: self)
     }
@@ -283,11 +284,47 @@ final class ControlModeTerminalView: TerminalView, TerminalViewDelegate {
     private(set) var lastOutputAt = Date()
     private var convergedSinceIdle = false
 
+    /// Bytes received since the last coalesced flush. Feeding SwiftTerm (escape
+    /// parsing + redraw) happens on the main thread; doing it once per %output
+    /// event lets a flooding pane starve the runloop and WindowServer — the
+    /// 2026-06-14 desktop freeze. Coalescing collapses every burst into ONE
+    /// feed per runloop turn, capped so a single multi-MB dump can't block a
+    /// frame; the runloop draws and services input between flushes, so a storm
+    /// throttles instead of freezing. Order is preserved (one FIFO buffer, all
+    /// on main).
+    private var pendingFeed: [UInt8] = []
+    private var feedFlushScheduled = false
+    /// Max bytes fed to SwiftTerm in one main-thread hop; the remainder rides
+    /// the next turn. Large enough never to throttle normal interactive output.
+    private static let maxFeedPerFlush = 128 * 1024
+
     func deliver(bytes: [UInt8]) {
         guard !awaitingHistory else { return } // contained in pending capture
         lastOutputAt = Date()
         convergedSinceIdle = false
-        feed(byteArray: bytes[...])
+        pendingFeed.append(contentsOf: bytes)
+        scheduleFeedFlush()
+    }
+
+    private func scheduleFeedFlush() {
+        guard !feedFlushScheduled else { return }
+        feedFlushScheduled = true
+        DispatchQueue.main.async { [weak self] in self?.flushPendingFeed() }
+    }
+
+    /// Drain up to one frame's worth of buffered output into SwiftTerm, then
+    /// yield. A flood keeps rescheduling, bounded per turn, so the UI stays live.
+    private func flushPendingFeed() {
+        feedFlushScheduled = false
+        // A replay started after these bytes queued → they're stale (the
+        // capture already contains them); drop rather than feed into a freshly
+        // reset buffer.
+        guard !awaitingHistory else { pendingFeed.removeAll(keepingCapacity: true); return }
+        guard !pendingFeed.isEmpty else { return }
+        let n = min(pendingFeed.count, Self.maxFeedPerFlush)
+        feed(byteArray: pendingFeed[0..<n])
+        pendingFeed.removeFirst(n)
+        if !pendingFeed.isEmpty { scheduleFeedFlush() } // more than a frame queued
     }
 
     /// Once a pane has been quiet for a few seconds, rebuild its display from
