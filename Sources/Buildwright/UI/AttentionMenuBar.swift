@@ -11,6 +11,9 @@ struct AttentionMenuBarContent: View {
         // E46-S3: warn-only resource governor — surfaces before the cliff.
         if governor.tier != .green {
             Text("\(governor.tier == .red ? "🔴" : "🟠") resources: \(governor.summary)")
+            if !governor.lastAction.isEmpty {
+                Text("   ↳ \(governor.lastAction)")
+            }
             Divider()
         }
         if app.attentionQueue.isEmpty {
