@@ -311,6 +311,17 @@ final class ControlModeTerminalView: TerminalView, TerminalViewDelegate {
     /// thrash; this stops a runaway agent at the source.
     private static let feedHighWater = 1 * 1024 * 1024   // pause above 1 MB buffered
     private static let feedLowWater  = 256 * 1024        // resume below 256 KB
+    // E46-S4 circuit-breaker: under cliff pressure the governor flips the cache's
+    // `underStress`, which clamps these budgets way down so panes pause far sooner
+    // — sheds rendering + memory + backpressures agents, fully reversibly.
+    private static let feedHighWaterStressed = 64 * 1024
+    private static let feedLowWaterStressed  = 16 * 1024
+    private var feedHighWaterNow: Int {
+        TerminalViewCache.shared.underStress ? Self.feedHighWaterStressed : Self.feedHighWater
+    }
+    private var feedLowWaterNow: Int {
+        TerminalViewCache.shared.underStress ? Self.feedLowWaterStressed : Self.feedLowWater
+    }
     /// Our intent (authoritative for behavior): have we asked tmux to pause?
     private(set) var flowPaused = false
     /// tmux's confirmation via %pause/%continue (diagnostics / health panel).
@@ -321,7 +332,7 @@ final class ControlModeTerminalView: TerminalView, TerminalViewDelegate {
         lastOutputAt = Date()
         convergedSinceIdle = false
         pendingFeed.append(contentsOf: bytes)
-        if !flowPaused, pendingFeed.count >= Self.feedHighWater { requestFlowPause() }
+        if !flowPaused, pendingFeed.count >= feedHighWaterNow { requestFlowPause() }
         scheduleFeedFlush()
     }
 
@@ -343,7 +354,7 @@ final class ControlModeTerminalView: TerminalView, TerminalViewDelegate {
         let n = min(pendingFeed.count, Self.maxFeedPerFlush)
         feed(byteArray: pendingFeed[0..<n])
         pendingFeed.removeFirst(n)
-        if flowPaused, pendingFeed.count <= Self.feedLowWater { requestFlowContinue() }
+        if flowPaused, pendingFeed.count <= feedLowWaterNow { requestFlowContinue() }
         if !pendingFeed.isEmpty { scheduleFeedFlush() } // more than a frame queued
     }
 
@@ -553,6 +564,34 @@ final class TerminalViewCache: ObservableObject {
                 }
             }
         }
+    }
+
+    // MARK: E46-S4 circuit-breaker (cliff shed-load — reversible)
+
+    /// When true, ControlModeTerminalView clamps its flow-control budgets hard,
+    /// so panes pause far sooner — shedding rendering + memory and backpressuring
+    /// agents. Flipped by the ResourceGovernor on the red (cliff) tier.
+    private(set) var underStress = false
+
+    /// Engage shed-load: tighten budgets now; already-buffered panes pause on
+    /// their next chunk. Returns a short log line of what it did.
+    @discardableResult
+    func engageStress() -> String {
+        guard !underStress else { return "shed-load already engaged" }
+        underStress = true
+        let dead = runStates.values.filter { $0 == .exited }.count
+        return "shed-load engaged (tight backpressure on \(views.count) panes\(dead > 0 ? "; \(dead) dead panes" : ""))"
+    }
+
+    /// Relieve shed-load: restore budgets and resume every paused pane so
+    /// buffered output drains. Returns a short log line.
+    @discardableResult
+    func relieveStress() -> String {
+        guard underStress else { return "shed-load already relieved" }
+        underStress = false
+        var resumed = 0
+        for view in views.values where view.flowPaused { view.continueFlowIfPaused(); resumed += 1 }
+        return "shed-load relieved (resumed \(resumed) paused panes)"
     }
 
     // MARK: Control-event routing (called by TmuxManager)

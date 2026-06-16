@@ -23,6 +23,8 @@ final class ResourceGovernor: ObservableObject {
     @Published private(set) var pressureLevel: String = "normal"
     @Published private(set) var agentCount = 0
     @Published private(set) var ownedFootprintBytes: UInt64 = 0
+    /// Last circuit-breaker action (E46-S4), for the menu/health surface.
+    @Published private(set) var lastAction = ""
 
     let physicalMemoryBytes: UInt64 = ProcessInfo.processInfo.physicalMemory
 
@@ -83,14 +85,24 @@ final class ResourceGovernor: ObservableObject {
     private func recomputeTier() {
         let phys = Double(physicalMemoryBytes)
         let fp = Double(ownedFootprintBytes)
+        let new: Tier
         if pressureLevel == "critical" || fp > redFootprintFraction * phys {
-            tier = .red
+            new = .red
         } else if pressureLevel == "warning"
                     || fp > amberFootprintFraction * phys
                     || agentCount >= amberAgentCount {
-            tier = .amber
+            new = .amber
         } else {
-            tier = .green
+            new = .green
+        }
+        guard new != tier else { return }
+        let was = tier
+        tier = new
+        // E46-S4 circuit-breaker: auto shed-load on the cliff, reverse on recovery.
+        if new == .red, was != .red {
+            lastAction = TerminalViewCache.shared.engageStress()
+        } else if was == .red, new != .red {
+            lastAction = TerminalViewCache.shared.relieveStress()
         }
     }
 
