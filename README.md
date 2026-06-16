@@ -136,6 +136,26 @@ buildwright/
 └── Tests/BuildwrightTests/      # Layout tree, frontmatter, tmux command tests
 ```
 
+## FAQ
+Are we iTerm2 or straight-up tmux?
+
+We are the iTerm2 model — not straight-up tmux. (This is from our design memory; I can confirm it against the code before we design on top of it, but I'm confident.)
+
+  - Straight-up tmux would mean rendering tmux's own TUI — its status bar, its pane borders — inside one terminal emulator. tmux draws; you attach to its drawing. One rendering surface, tmux owns layout.
+  - What Buildwright actually is: tmux control mode (tmux -C). tmux runs headless — no TUI at all. Each pane's output arrives as %output events and is fed into a native SwiftTerm buffer; Buildwright is the sole renderer and sole sizing authority (window-size manual,
+  aggressive-resize off, refresh-client -C @id:WxH). tmux is reduced to a multiplexer + persistence layer. That's exactly iTerm2's integration.
+
+Why this matters for resilience — and it's the key insight: the iTerm2 model already gives you a blast-resistant backend. tmux survived your 11:30 freeze; the agents lived; you lost nothing by force-quitting. The fragile half is the GUI/render path — main thread, SwiftTerm draws, WindowServer. So your freeze risk lives almost entirely on the Buildwright app side, not the tmux side. That reframes the whole self-healing problem:
+
+We don't need to make tmux survivable — it already is. We need to make the GUI's hang/leak/storm harmless and self-recovering, and put a resource governor between agents and the renderer so one bad actor can't self-DoS the box.
+
+The threat model:
+
+  1. Single roof / blast radius — one app + one tmux server own every terminal and agent. One leak or storm threatens all of it (and the desktop).
+  2. No backpressure — a runaway agent flooding %output can drown the main-thread renderer → WindowServer stall → the freeze you hit. (Our memory literally lists "no flow control" as a deliberate v1 gap. That gap is the bug.)
+  3. No resource governor — nothing caps total agents/memory/CPU or sheds load at the cliff. The 26-agent/10.7 GB standing army was this.
+  4. No self-heal — no auto-rebind after tmux death, no main-thread watchdog, no emergency load-shed. Recovery today = you force-quit.
+
 ## Development
 
 ```bash
