@@ -7,6 +7,7 @@ struct AttentionMenuBarContent: View {
     @EnvironmentObject var app: AppState
     @ObservedObject private var governor = ResourceGovernor.shared
     @ObservedObject private var watchdog = MainThreadWatchdog.shared
+    @ObservedObject private var paneCache = TerminalViewCache.shared
 
     var body: some View {
         // E46-S3: warn-only resource governor — surfaces before the cliff.
@@ -15,6 +16,12 @@ struct AttentionMenuBarContent: View {
             if !governor.lastAction.isEmpty {
                 Text("   ↳ \(governor.lastAction)")
             }
+            Divider()
+        }
+        // E46-S5: one-click reap of clearly-dead (exited) panes.
+        let deadCount = paneCache.exitedPaneIDs().count
+        if deadCount > 0 {
+            Button("Reap \(deadCount) dead pane\(deadCount == 1 ? "" : "s")") { app.reapDeadPanes() }
             Divider()
         }
         if !watchdog.lastHang.isEmpty {

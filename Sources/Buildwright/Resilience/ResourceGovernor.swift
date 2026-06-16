@@ -25,6 +25,8 @@ final class ResourceGovernor: ObservableObject {
     @Published private(set) var ownedFootprintBytes: UInt64 = 0
     /// Last circuit-breaker action (E46-S4), for the menu/health surface.
     @Published private(set) var lastAction = ""
+    /// Set by AppState: reap clearly-dead panes at the cliff (S4 ladder rung 4).
+    var onCliffReap: (() -> Void)?
 
     let physicalMemoryBytes: UInt64 = ProcessInfo.processInfo.physicalMemory
 
@@ -101,6 +103,7 @@ final class ResourceGovernor: ObservableObject {
         // E46-S4 circuit-breaker: auto shed-load on the cliff, reverse on recovery.
         if new == .red, was != .red {
             lastAction = TerminalViewCache.shared.engageStress()
+            onCliffReap?() // S4 rung 4: reap clearly-dead panes (reclaims their memory)
         } else if was == .red, new != .red {
             lastAction = TerminalViewCache.shared.relieveStress()
         }
