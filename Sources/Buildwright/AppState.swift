@@ -47,6 +47,7 @@ final class AppState: ObservableObject {
         StateStore.shared.backupOnce() // known-good copy from before this session
         HooksInstaller.installIfNeeded()
         BWCLIInstaller.installIfNeeded()
+        ResourceGovernor.shared.start() // E46-S3: watch memory pressure + agent footprint
 
         if let saved = StateStore.shared.load() {
             workspaces = saved.workspaces

@@ -45,6 +45,10 @@ final class TmuxManager {
         return control
     }
 
+    /// Live tmux session names Buildwright owns (one per active workspace
+    /// connection) — the scope the resource governor measures.
+    func ownedSessionNames() -> [String] { Array(controlClients.keys) }
+
     /// Disconnect and forget a workspace's control state (workspace deleted).
     func dropSession(_ session: String) {
         controlClients[session]?.disconnect()
