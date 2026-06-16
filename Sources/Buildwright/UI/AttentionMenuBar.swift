@@ -6,6 +6,7 @@ import SwiftUI
 struct AttentionMenuBarContent: View {
     @EnvironmentObject var app: AppState
     @ObservedObject private var governor = ResourceGovernor.shared
+    @ObservedObject private var watchdog = MainThreadWatchdog.shared
 
     var body: some View {
         // E46-S3: warn-only resource governor — surfaces before the cliff.
@@ -14,6 +15,10 @@ struct AttentionMenuBarContent: View {
             if !governor.lastAction.isEmpty {
                 Text("   ↳ \(governor.lastAction)")
             }
+            Divider()
+        }
+        if !watchdog.lastHang.isEmpty {
+            Text("⚠︎ \(watchdog.lastHang)")
             Divider()
         }
         if app.attentionQueue.isEmpty {
