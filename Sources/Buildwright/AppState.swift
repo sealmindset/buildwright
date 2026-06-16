@@ -48,6 +48,7 @@ final class AppState: ObservableObject {
         HooksInstaller.installIfNeeded()
         BWCLIInstaller.installIfNeeded()
         ResourceGovernor.shared.start() // E46-S3: watch memory pressure + agent footprint
+        ResourceGovernor.shared.onCliffReap = { [weak self] in _ = self?.reapDeadPanes() } // S4 rung 4
         MainThreadWatchdog.shared.start() // E46-S6: detect main-thread hangs + self-sample
 
         if let saved = StateStore.shared.load() {
@@ -1310,6 +1311,51 @@ final class AppState: ObservableObject {
         persist()
     }
 
+    // MARK: E46-S5 — reap-on-close (confirm if busy) + dead-pane reap
+
+    struct PaneCloseRequest: Identifiable { let id: UUID; let title: String }
+    /// Set when a close is requested on a busy agent; the main window shows a
+    /// confirm alert bound to this.
+    @Published var paneCloseConfirm: PaneCloseRequest?
+
+    /// A terminal pane whose Claude is mid-task. Closing it ends live work.
+    func isAgentBusy(_ pane: Pane) -> Bool {
+        pane.isTerminal && claudeState(pane.shortID) == .working
+    }
+
+    private func paneByID(_ id: UUID) -> Pane? {
+        guard let wi = activeWorkspaceIndex else { return nil }
+        for tab in workspaces[wi].tabs {
+            if let p = tab.panes.first(where: { $0.id == id }) { return p }
+        }
+        return nil
+    }
+
+    /// User-initiated close: reap immediately if idle, else confirm first.
+    func requestClosePane(_ paneID: UUID) {
+        guard let pane = paneByID(paneID), isAgentBusy(pane) else {
+            closePane(paneID)
+            return
+        }
+        paneCloseConfirm = PaneCloseRequest(id: paneID, title: pane.title)
+    }
+
+    func confirmPendingClose() {
+        guard let req = paneCloseConfirm else { return }
+        paneCloseConfirm = nil
+        closePane(req.id)
+    }
+
+    /// Reap panes whose agent process has exited (clearly-dead) — frees their
+    /// views and removes the dead panes. Returns how many. No live work lost;
+    /// also the mechanism behind S4's cliff reap rung.
+    @discardableResult
+    func reapDeadPanes() -> Int {
+        let dead = TerminalViewCache.shared.exitedPaneIDs()
+        for id in dead { closePane(id) }
+        return dead.count
+    }
+
     func closePane(_ paneID: UUID) {
         guard let wi = activeWorkspaceIndex else { return }
         let ws = workspaces[wi]
@@ -1319,6 +1365,11 @@ final class AppState: ObservableObject {
                 tmux.destroyWindow(for: pane, in: ws)
                 paneStatuses.removeValue(forKey: pane.shortID)
             }
+            // Centralized view teardown (callers used to do this before closePane;
+            // now it happens only when the close actually proceeds — so a
+            // cancelled busy-confirm leaves the live view intact).
+            TerminalViewCache.shared.remove(pane.id)
+            WebViewCache.shared.remove(pane)
             if let branch = pane.worktreeBranch {
                 let removed = GitWorktree.removeIfClean(repo: ws.baseRepo, path: pane.directory)
                 ShellExec.notify(title: "Buildwright", body: removed

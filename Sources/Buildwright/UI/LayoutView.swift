@@ -279,9 +279,7 @@ struct PaneContainerView: View {
                 .foregroundStyle(.tertiary)
                 .lineLimit(1).truncationMode(.head)
             Button {
-                TerminalViewCache.shared.remove(pane.id)
-                WebViewCache.shared.remove(pane)
-                app.closePane(pane.id)
+                app.requestClosePane(pane.id)
             } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 8, weight: .bold))
@@ -368,8 +366,7 @@ struct PaneStateOverlay: View {
                     .controlSize(.mini)
                     .help("Checks tmux first — if the session is actually alive, this only clears the banner and resyncs the display")
                 Button("Close") {
-                    TerminalViewCache.shared.remove(pane.id)
-                    app.closePane(pane.id)
+                    app.requestClosePane(pane.id)
                 }
                 .controlSize(.mini)
             }

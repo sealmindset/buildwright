@@ -13,6 +13,15 @@ struct MainWindowView: View {
                 .frame(minWidth: 480, maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(minWidth: 900, minHeight: 560)
+        .alert("Agent is working", isPresented: Binding(
+            get: { app.paneCloseConfirm != nil },
+            set: { if !$0 { app.paneCloseConfirm = nil } }
+        ), presenting: app.paneCloseConfirm) { _ in
+            Button("Close anyway", role: .destructive) { app.confirmPendingClose() }
+            Button("Cancel", role: .cancel) { app.paneCloseConfirm = nil }
+        } message: { req in
+            Text("“\(req.title)” has a task in progress. Close and end it? The transcript persists — you can resume later with `claude --resume`.")
+        }
         .sheet(isPresented: $app.showNewWorkspaceSheet) {
             NewWorkspaceSheet()
         }

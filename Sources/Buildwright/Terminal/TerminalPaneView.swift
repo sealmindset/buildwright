@@ -660,6 +660,11 @@ final class TerminalViewCache: ObservableObject {
 
     func contains(_ paneID: UUID) -> Bool { views[paneID] != nil }
 
+    /// Pane UUIDs whose agent process has exited (clearly-dead) — reap targets.
+    func exitedPaneIDs() -> [UUID] {
+        runStates.compactMap { $0.value == .exited ? $0.key : nil }
+    }
+
     func refreshPane(_ paneID: UUID) {
         views[paneID]?.refreshFromTmux()
     }

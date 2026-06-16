@@ -130,8 +130,7 @@ struct MissionControlCard: View {
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(state == .needsInput ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
                 Button {
-                    TerminalViewCache.shared.remove(entry.pane.id)
-                    app.closePane(entry.pane.id)
+                    app.requestClosePane(entry.pane.id)
                 } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 8, weight: .bold))
