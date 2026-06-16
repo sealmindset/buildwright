@@ -26,6 +26,11 @@ final class TmuxControlClient {
         /// client, server events). Carries the new size so views can detect
         /// drift between what they render and what tmux believes.
         case layoutChange(windowID: String, cols: Int, rows: Int)
+        /// Flow control (control-mode backpressure): tmux paused/continued a
+        /// pane's output. We drive these from the render budget; tmux buffers
+        /// paused output and replays it on continue (no data loss).
+        case paused(paneID: String)
+        case continued(paneID: String)
         case exited
     }
 
@@ -159,6 +164,15 @@ final class TmuxControlClient {
     func setWindowSize(windowID: String, cols: Int, rows: Int) {
         guard cols > 1, rows > 1 else { return }
         send("refresh-client -C \(windowID):\(cols)x\(rows)")
+    }
+
+    /// Control-mode flow control: pause or resume tmux output for one pane
+    /// (`refresh-client -A %pane:pause|continue`, tmux ≥ 3.2). tmux buffers a
+    /// paused pane's output and replays it on continue — no data is lost. This
+    /// is the backpressure valve: ControlModeTerminalView pauses a pane that
+    /// outruns its render budget and continues it once drained.
+    func setPaneFlow(paneID: String, state: String) {
+        send("refresh-client -A \(paneID):\(state)")
     }
 
     /// Scrollback ABOVE the visible screen (with colors), for replay into a
@@ -313,6 +327,14 @@ final class TmuxControlClient {
                         onEvent?(.layoutChange(windowID: String(parts[1]), cols: w, rows: h))
                     }
                 }
+            }
+        } else if line.hasPrefix("%pause ") {
+            if let id = line.split(separator: " ").last {
+                onEvent?(.paused(paneID: String(id)))
+            }
+        } else if line.hasPrefix("%continue ") {
+            if let id = line.split(separator: " ").last {
+                onEvent?(.continued(paneID: String(id)))
             }
         } else if line.hasPrefix("%exit") {
             // Termination handler does the cleanup; nothing to do here.
