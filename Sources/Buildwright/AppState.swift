@@ -48,6 +48,7 @@ final class AppState: ObservableObject {
         HooksInstaller.installIfNeeded()
         BWCLIInstaller.installIfNeeded()
         ResourceGovernor.shared.start() // E46-S3: watch memory pressure + agent footprint
+        MainThreadWatchdog.shared.start() // E46-S6: detect main-thread hangs + self-sample
 
         if let saved = StateStore.shared.load() {
             workspaces = saved.workspaces
