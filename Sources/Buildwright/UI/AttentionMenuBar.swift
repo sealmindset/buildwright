@@ -5,8 +5,14 @@ import SwiftUI
 /// lists every waiting pane (oldest first) and jumps straight to it.
 struct AttentionMenuBarContent: View {
     @EnvironmentObject var app: AppState
+    @ObservedObject private var governor = ResourceGovernor.shared
 
     var body: some View {
+        // E46-S3: warn-only resource governor — surfaces before the cliff.
+        if governor.tier != .green {
+            Text("\(governor.tier == .red ? "🔴" : "🟠") resources: \(governor.summary)")
+            Divider()
+        }
         if app.attentionQueue.isEmpty {
             if app.workingCount > 0 {
                 Text("● \(app.workingCount) working — nothing needs you")
