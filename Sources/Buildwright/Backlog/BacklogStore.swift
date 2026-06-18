@@ -65,11 +65,12 @@ final class BacklogStore: ObservableObject {
         guard !fields.isEmpty else { return nil }
         var dict: [String: String] = [:]
         for (k, v) in fields { dict[k] = v }
-        let known = Set(["id", "title", "type", "status", "category", "priority", "parent", "created", "updated", "design"])
+        let known = Set(["id", "title", "type", "size", "status", "category", "priority", "parent", "created", "updated", "design"])
         return BacklogItem(
             itemID: dict["id"] ?? url.deletingPathExtension().lastPathComponent,
             title: dict["title"] ?? "",
             type: dict["type"] ?? (url.lastPathComponent == "epic.md" ? "epic" : "story"),
+            size: dict["size"] ?? "",
             status: dict["status"] ?? "backlog",
             category: dict["category"] ?? "",
             priority: dict["priority"] ?? "",

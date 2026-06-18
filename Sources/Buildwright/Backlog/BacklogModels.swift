@@ -6,7 +6,8 @@ struct BacklogItem: Identifiable, Equatable {
     var id: String { itemID }
     var itemID: String          // "E04" or "E04-S2"
     var title: String
-    var type: String            // "epic" | "story"
+    var type: String            // "epic" | "story" | "task" | "breakfix" | "spike"
+    var size: String            // "XS" | "S" | "M" | "L" | "XL" or "" (t-shirt sizing)
     var status: String          // backlog/designing/ready/in-progress/blocked/done
     var category: String
     var priority: String        // P1/P2/P3 or ""
@@ -23,6 +24,7 @@ struct BacklogItem: Identifiable, Equatable {
 
     static func == (lhs: BacklogItem, rhs: BacklogItem) -> Bool {
         lhs.itemID == rhs.itemID && lhs.title == rhs.title && lhs.type == rhs.type
+            && lhs.size == rhs.size
             && lhs.status == rhs.status && lhs.category == rhs.category
             && lhs.priority == rhs.priority && lhs.parent == rhs.parent
             && lhs.created == rhs.created && lhs.updated == rhs.updated
