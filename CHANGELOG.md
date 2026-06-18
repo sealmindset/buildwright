@@ -2,6 +2,12 @@
 
 All notable changes to Buildwright are documented here.
 
+## [Unreleased]
+
+### Added
+- Backlog Map (⇧⌘M, toolbar ⃕ button, Attention menu) — an elegant full-screen popup that renders the whole `~/.claude/backlog` board as a layered dependency/flow graph. Nodes are epics + stories/tasks/breakfix (status-coloured, with priority/effort/type badges); edges show epic→child containment (dashed) and explicit `depends:` dependencies (solid orange arrows, laid out left→right by dependency depth). Filters for status, type, priority, effort, search, and show-done; pinch/slider zoom; click a card to edit (reuses the detail sheet), ▶ to start a Claude pane, right-click to set status.
+- Board-hygiene signals baked into the map (the Scrum Master's job — keep the board honest): **parallel-ready** items (can start now: ready/backlog, deps done, parent unblocked, no in-progress collision in the same category) ringed green with a one-click ▶; **stale** open items (untouched 14+ days) flagged amber with a "Stale only" filter; **superseded / no-longer-required** items (a `superseded_by:` key set by the Scrum Master) shown struck-through with a "→ Sx" badge and a "Superseded only" filter; plus a header pulse counting in-progress / stale / superseded and a node action to mark an item done — no longer required.
+
 ## [0.36.0] - 2026-06-18
 
 ### Added

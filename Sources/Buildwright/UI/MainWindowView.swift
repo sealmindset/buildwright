@@ -49,6 +49,9 @@ struct MainWindowView: View {
         .sheet(isPresented: $app.showGroomSheet) {
             BacklogGroomView(groomer: app.groomer)
         }
+        .sheet(isPresented: $app.showBacklogGraph) {
+            BacklogGraphView(store: app.backlog).environmentObject(app)
+        }
         .sheet(isPresented: $app.showReconcileSheet) {
             ReconcileView(reconciler: app.reconciler)
         }
@@ -86,6 +89,12 @@ struct MainWindowView: View {
             }
             .buttonStyle(.borderless)
             .help("Toggle backlog sidebar (⌘1)")
+
+            Button { app.showBacklogGraph = true } label: {
+                Image(systemName: "point.3.connected.trianglepath.dotted")
+            }
+            .buttonStyle(.borderless)
+            .help("Backlog Map — visual dependency/flow view with filters (⇧⌘M)")
 
             WorkspaceSwitcher()
 
