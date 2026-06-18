@@ -589,7 +589,7 @@ struct BacklogGraphView: View {
 
 // MARK: - Small badges
 
-private struct TypeBadge: View {
+struct TypeBadge: View {
     let type: String
     private var color: Color {
         switch type {

@@ -96,6 +96,8 @@ struct BuildwrightApp: App {
                     .keyboardShortcut("k", modifiers: .command)
                 Button("Mission Control") { app.showMissionControl = true }
                     .keyboardShortcut("k", modifiers: [.command, .shift])
+                Button("Finish Line (production burn-down)…") { app.showFinishLine = true }
+                    .keyboardShortcut("f", modifiers: [.command, .option])
                 Button("Backlog Map…") { app.showBacklogGraph = true }
                     .keyboardShortcut("m", modifiers: [.command, .shift])
                 Button("Plan Backlog (AI)…") { app.showPlanSheet = true }

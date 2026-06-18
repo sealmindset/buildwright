@@ -33,6 +33,7 @@ final class AppState: ObservableObject {
     @Published var showGroomSheet = false
     @Published var showReconcileSheet = false
     @Published var showBacklogGraph = false
+    @Published var showFinishLine = false
     /// Target repo the reconciliation engine audits the board against.
     @Published var docaiPath: String = Config.defaultDocaiPath
     @Published var autoPlanOnLaunch = true

@@ -52,6 +52,9 @@ struct MainWindowView: View {
         .sheet(isPresented: $app.showBacklogGraph) {
             BacklogGraphView(store: app.backlog).environmentObject(app)
         }
+        .sheet(isPresented: $app.showFinishLine) {
+            BacklogFinishLineView(store: app.backlog).environmentObject(app)
+        }
         .sheet(isPresented: $app.showReconcileSheet) {
             ReconcileView(reconciler: app.reconciler)
         }
@@ -89,6 +92,12 @@ struct MainWindowView: View {
             }
             .buttonStyle(.borderless)
             .help("Toggle backlog sidebar (⌘1)")
+
+            Button { app.showFinishLine = true } label: {
+                Image(systemName: "flag.checkered")
+            }
+            .buttonStyle(.borderless)
+            .help("Finish Line — live production burn-down dashboard (⌥⌘F)")
 
             Button { app.showBacklogGraph = true } label: {
                 Image(systemName: "point.3.connected.trianglepath.dotted")
