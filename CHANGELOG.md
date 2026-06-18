@@ -2,6 +2,25 @@
 
 All notable changes to Buildwright are documented here.
 
+## [0.36.0] - 2026-06-18
+
+### Added
+- AI Scrum Master — code-grounded reconciliation + autonomous dispatch (E51). New `Reconciler` engine + cockpit Reconcile panel that audits the backlog board against a real codebase (default `~/Documents/GitHub/docai`, configurable) via a code→tests→live verification ladder, returns per-item verdicts (built/partial/not-built/unknown + confidence + evidence), auto-applies high-confidence reversible findings (mark-done/close-dup/re-status) with provenance + undo, and flags the rest.
+- Dispatch: surfaces the next parallel-safe `not-built`/`partial` gap and starts it (behind an arm toggle, one at a time), running under the standing ship preamble's green-gate + harm-gate.
+- Skill side: `/backlog reconcile` and `/backlog dispatch` subcommands; the standing prompt preamble (clarify-first + 100%-green gate + harm-gated ship) is auto-prepended to every `/backlog start`.
+
+## [0.35.0] - 2026-06-18
+
+### Added
+- AI Scrum Master intake (E50): a ⌘⇧N quick-capture sheet and a `/backlog capture` skill subcommand sharing one triage engine — raw text is auto-classified (epic/story/task/breakfix/spike), sized (XS–XL), placed into the best-fit epic (or a new one), and filed with a provenance block and one-tap Undo.
+- Backlog schema gained an optional `size` field and `breakfix`/`spike` item types (backward-compatible).
+
+## [0.34.0] - 2026-06-15
+
+### Added
+- Resilience safety net (E46): coalesced render feed, per-pane flow control / render-budget backpressure, RAM-derived resource governor, emergency circuit-breaker + degradation ladder, main-thread hang watchdog, and agent reaping (reap-on-close + dead-pane reap).
+- Buildwright plugin mechanism with CVR as the first installable plugin (E48); clean initial paint (size tmux before first capture).
+
 ## [0.1.0] - 2026-06-10
 
 ### Added
