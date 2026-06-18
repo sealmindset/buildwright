@@ -18,6 +18,8 @@ struct AppPersistedState: Codable {
     var aiSpendMonth: String?
     var dismissedDrift: [String]?
     var lastDigestDate: String?
+    var docaiPath: String?
+    var reconcileArmed: Bool?
     var claudeModel: String?
 }
 

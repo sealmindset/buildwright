@@ -177,6 +177,23 @@ final class BacklogStore: ObservableObject {
         write(fields: fields, body: body, to: item.fileURL)
     }
 
+    /// Append a pre-formatted markdown block (already including its own `##`
+    /// header) to an item's body, keeping History last when present. Used for
+    /// the reconciliation provenance block, which is multi-line free markdown.
+    func appendSectionRaw(_ item: BacklogItem, _ markdown: String) {
+        guard let content = try? String(contentsOf: item.fileURL, encoding: .utf8) else { return }
+        var (fields, body) = Frontmatter.parse(content)
+        Self.setField(&fields, "updated", Self.today)
+        let block = "\n" + markdown + "\n"
+        if let range = body.range(of: "\n## History") {
+            body.insert(contentsOf: block, at: range.lowerBound)
+        } else {
+            while body.hasSuffix("\n") { body.removeLast() }
+            body += "\n" + block
+        }
+        write(fields: fields, body: body, to: item.fileURL)
+    }
+
     /// Move a story to another epic: it gets the target's next S-number and
     /// a fresh id; the old file goes away. Returns the new id. (How inbox
     /// thoughts graduate into real epics.)

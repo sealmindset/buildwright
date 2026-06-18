@@ -99,6 +99,7 @@ struct BuildwrightApp: App {
                 Button("Plan Backlog (AI)…") { app.showPlanSheet = true }
                     .keyboardShortcut("p", modifiers: [.command, .shift])
                 Button("Groom Backlog (AI)…") { app.showGroomSheet = true }
+                Button("Reconcile Board ↔ Code (AI)…") { app.showReconcileSheet = true }
                 Divider()
                 Button("Copy Diagnostics Snapshot") { app.copyDiagnostics() }
                 Button("Capture to Backlog (AI triage)…") { app.showScrumCapture = true }
