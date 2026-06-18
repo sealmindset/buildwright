@@ -4,6 +4,19 @@
 - [ ] Install mosh for iPad remote access: `brew install mosh` (Remote Access panel guides this)
 - [ ] Grant Accessibility permission if you want CVR Chromium window auto-docking
 
+## E50: AI Scrum Master intake (shipped 2026-06-18 — verify in the GUI)
+- [ ] Quit + relaunch /Applications/Buildwright.app to load the new build (⌘⇧N / E50).
+- [ ] Smoke-test ⌘⇧N: capture a throwaway thought → triage + file → `✓ Filed … — Undo` toast → hit Undo (or `/backlog undo`) so no test item lingers. Also confirm via ⌘K palette ("Capture to backlog").
+- [ ] Sanity-check the app door's live `claude -p` triage quality (placement/size look right on real captures).
+- [ ] (Optional) Bump the hardcoded version in Scripts/bundle.sh when cutting a real release.
+- Skill door (`/backlog capture` + `/backlog undo`, schema `size`/breakfix/spike) is live; verified by the E46-S18 capture.
+
+## Bug: full-pane "selection wash" when an epic finishes — now tracked as backlog E46-S18 (diagnosed 2026-06-16, not yet fixed)
+- [ ] Symptom: when an agent/epic finishes, the whole terminal pane shows an inverse-video wash (looks "selected"); pane still works; clears when you type/click/resize elsewhere.
+- [ ] Diagnosis (high confidence): it's a real SwiftTerm text selection. SwiftTerm only clears selections on streaming output when mouse reporting is ON (`feedPrepare`/`linefeed` guard on `allowMouseReporting`). On process exit the TUI turns mouse reporting OFF, so SwiftTerm deliberately preserves the selection and it renders over the whole pane. `keyDown`/`mouseDown`/`resizeSubviews`/idle-converge each reset `selection.active` → that's why it clears.
+- [ ] OPEN: what *creates* the whole-buffer selection at completion (stray gesture? triple-click? auto select-all?). This decides fix: "clear selection on process-exit transition" vs. fix a gesture path. Do NOT ship a guess — confirm first.
+- [ ] To confirm next session: (1) with a pane washed, does ⌘C copy the entire screen's text? (2) does it happen on plain shell panes too, or only Claude/agent panes? OR build an instrumented debug build that logs selection state at the moment a pane exits.
+
 ## Next session (2026-06-15)
 - [ ] Reinstall from main to run the full safety net + CVR plugin: `git checkout main && Scripts/bundle.sh --install`
 - [ ] Smoke-test (GUI-only confirms): governor chip in Attention menu, watchdog recovery notification, busy-close confirm alert, Settings → Plugins tab, a real CVR recording (toolbar top-center; captures land in `<workspace>/cvr-captures`)
