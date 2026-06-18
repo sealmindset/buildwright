@@ -42,6 +42,10 @@ enum Config {
     /// Default location of the CVR tool; configurable in Settings.
     static let defaultCVRPath = NSString(string: "~/Documents/GitHub/docai/tools/cvr").expandingTildeInPath
 
+    /// Default target repo the reconciliation engine audits the board against;
+    /// configurable in Settings so the engine generalizes to other repos.
+    static let defaultDocaiPath = NSString(string: "~/Documents/GitHub/docai").expandingTildeInPath
+
     /// Where installed tool plugins are cloned (one subdirectory per plugin,
     /// each with a plugin.json manifest). See PluginManager.
     static var pluginsDirectory: URL {

@@ -207,6 +207,7 @@ struct CommandPaletteView: View {
             ("act-ws", "folder.badge.plus", "New workspace", { app.showNewWorkspaceSheet = true }),
             ("act-cvr", "record.circle", "CVR recording session", { app.showCVRSheet = true }),
             ("act-capture", "sparkle.magnifyingglass", "Capture to backlog", { app.showScrumCapture = true }),
+            ("act-reconcile", "checklist.checked", "Reconcile board ↔ code (AI)", { app.showReconcileSheet = true }),
             ("act-sidebar", "sidebar.left", "Toggle backlog sidebar", { app.sidebarVisible.toggle(); app.persist() }),
             ("act-jump", "bolt.fill", "Jump to next needing you", { app.jumpToNextAttention() })
         ]

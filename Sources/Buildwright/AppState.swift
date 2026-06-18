@@ -27,9 +27,13 @@ final class AppState: ObservableObject {
     let groomer = BacklogGroomer()
     let scrumMaster = ScrumMaster()
     lazy var captureIntake = CaptureIntake(store: backlog)
+    lazy var reconciler = Reconciler(store: backlog)
     let permissions = PermissionsManager()
     @Published var showPlanSheet = false
     @Published var showGroomSheet = false
+    @Published var showReconcileSheet = false
+    /// Target repo the reconciliation engine audits the board against.
+    @Published var docaiPath: String = Config.defaultDocaiPath
     @Published var autoPlanOnLaunch = true
     private var statusMonitor: ClaudeStatusMonitor?
 
@@ -78,6 +82,8 @@ final class AppState: ObservableObject {
             aiSpendMonth = saved.aiSpendMonth ?? ""
             dismissedDrift = Set(saved.dismissedDrift ?? [])
             lastDigestDate = saved.lastDigestDate ?? ""
+            if let p = saved.docaiPath, !p.isEmpty { docaiPath = p }
+            if let a = saved.reconcileArmed { reconciler.armed = a }
             if let m = saved.claudeModel { claudeModel = m }
             // DECISIONS.md era: upgrade an unmodified chat prompt in place.
             if saved.chatPrompt == AppState.legacyChatPrompt { chatPrompt = AppState.defaultChatPrompt }
@@ -88,6 +94,14 @@ final class AppState: ObservableObject {
         scrumMaster.onAction = { [weak self] action in self?.executeScrumAction(action) }
         captureIntake.onCost = { [weak self] usd in self?.recordAISpend(usd) }
         captureIntake.boardSnapshot = { [weak self] in self?.captureBoardSnapshot() ?? "" }
+        reconciler.onCost = { [weak self] usd in self?.recordAISpend(usd) }
+        reconciler.boardSnapshot = { [weak self] in self?.captureBoardSnapshot() ?? "" }
+        reconciler.targetRepoPath = { [weak self] in self?.docaiPath ?? Config.defaultDocaiPath }
+        reconciler.itemLookup = { [weak self] id in self?.backlogItem(byID: id) }
+        reconciler.epicsSnapshot = { [weak self] in self?.backlog.epics ?? [] }
+        reconciler.planSnapshot = { [weak self] in self?.planner.plan }
+        reconciler.onDispatch = { [weak self] item in self?.dispatchReconcileGap(item) }
+        reconciler.loadSavedReport()
         applyClaudeModel() // push the loaded model into tmux/planner/groomer/scrum/capture
         TerminalViewCache.shared.applyFontSize(CGFloat(terminalFontSize))
         // System-wide ⌥⌘B → app forward + Mission Control.
@@ -205,6 +219,8 @@ final class AppState: ObservableObject {
             aiSpendMonth: aiSpendMonth,
             dismissedDrift: dismissedDrift.sorted(),
             lastDigestDate: lastDigestDate,
+            docaiPath: docaiPath,
+            reconcileArmed: reconciler.armed,
             claudeModel: claudeModel
         ))
     }
@@ -1751,6 +1767,7 @@ final class AppState: ObservableObject {
         groomer.model = claudeModel
         scrumMaster.model = claudeModel
         captureIntake.model = claudeModel
+        reconciler.model = claudeModel
         persist()
     }
 
@@ -2046,6 +2063,36 @@ final class AppState: ObservableObject {
             break
         }
         recomputeDrift()
+    }
+
+    // MARK: Reconciliation (board ↔ code; auto-apply high-confidence, flag the rest)
+
+    func runReconcile() { reconciler.runReconcile() }
+
+    /// Accept a flagged reconciliation finding: apply it and record the ruling
+    /// project-wide + on the item (the engine also writes the provenance block).
+    func acceptReconcile(_ v: ReconcileVerdict) {
+        reconciler.accept(v)
+        logRuling(item: v.item, "reconcile applied \(v.proposed_action.kind) on \(v.item) — \(v.proposed_action.why)")
+    }
+
+    func rejectReconcile(_ v: ReconcileVerdict) { reconciler.reject(v) }
+
+    func undoReconcile(_ app: ReconcileApplication) {
+        reconciler.undo(app)
+        appendDecision("reconcile undone for \(app.item) — restored \(app.priorStatus)")
+    }
+
+    /// Toggle the dispatch arm and persist it.
+    func setReconcileArmed(_ on: Bool) {
+        reconciler.armed = on
+        persist()
+    }
+
+    /// Dispatch the chosen safe gap through the standard start path, and log it.
+    private func dispatchReconcileGap(_ item: BacklogItem) {
+        startBacklogItem(item)
+        logRuling(item: item.itemID, "reconcile dispatched \(item.itemID) (next parallel-safe gap)")
     }
 
     // MARK: Item traceability (history lives in the item's own markdown)

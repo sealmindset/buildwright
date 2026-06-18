@@ -49,6 +49,9 @@ struct MainWindowView: View {
         .sheet(isPresented: $app.showGroomSheet) {
             BacklogGroomView(groomer: app.groomer)
         }
+        .sheet(isPresented: $app.showReconcileSheet) {
+            ReconcileView(reconciler: app.reconciler)
+        }
     }
 
     private var mainArea: some View {
