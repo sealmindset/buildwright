@@ -11,6 +11,13 @@
 - [ ] (Optional) Bump the hardcoded version in Scripts/bundle.sh when cutting a real release.
 - Skill door (`/backlog capture` + `/backlog undo`, schema `size`/breakfix/spike) is live; verified by the E46-S18 capture.
 
+## E51: AI Scrum Master reconciliation + dispatch (shipped 2026-06-18 — verify in the GUI)
+- [ ] After relaunch, open the Reconcile panel. **First run = reconcile-only / dry-run** against docai (`~/Documents/GitHub/docai`); review the built/partial/not-built verdicts + evidence before arming dispatch.
+- [ ] Confirm auto-applied vs flagged behaves (high-confidence reversible → applied with provenance + undo; rest flagged). Test Undo on an applied finding.
+- [ ] Only after the verdicts look trustworthy, arm dispatch and let it start one safe gap — watch that the standing ship preamble (green-gate + harm-gate) governs any docai deploy.
+- [ ] Skill side (`/backlog reconcile`, `/backlog dispatch`) works in any Claude Code session now — try `/backlog reconcile E20 --dry-run` (or equivalent) on a known-built epic to sanity-check grounding.
+- Standing ship preamble (green-gate + harm-gate) is live on every `/backlog start`; skill backed up in the backlog repo.
+
 ## Bug: full-pane "selection wash" when an epic finishes — now tracked as backlog E46-S18 (diagnosed 2026-06-16, not yet fixed)
 - [ ] Symptom: when an agent/epic finishes, the whole terminal pane shows an inverse-video wash (looks "selected"); pane still works; clears when you type/click/resize elsewhere.
 - [ ] Diagnosis (high confidence): it's a real SwiftTerm text selection. SwiftTerm only clears selections on streaming output when mouse reporting is ON (`feedPrepare`/`linefeed` guard on `allowMouseReporting`). On process exit the TUI turns mouse reporting OFF, so SwiftTerm deliberately preserves the selection and it renders over the whole pane. `keyDown`/`mouseDown`/`resizeSubviews`/idle-converge each reset `selection.active` → that's why it clears.
