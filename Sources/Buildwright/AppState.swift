@@ -26,6 +26,7 @@ final class AppState: ObservableObject {
     let planner = BacklogPlanner()
     let groomer = BacklogGroomer()
     let scrumMaster = ScrumMaster()
+    lazy var captureIntake = CaptureIntake(store: backlog)
     let permissions = PermissionsManager()
     @Published var showPlanSheet = false
     @Published var showGroomSheet = false
@@ -85,7 +86,9 @@ final class AppState: ObservableObject {
         groomer.onCost = { [weak self] usd in self?.recordAISpend(usd) }
         scrumMaster.onCost = { [weak self] usd in self?.recordAISpend(usd) }
         scrumMaster.onAction = { [weak self] action in self?.executeScrumAction(action) }
-        applyClaudeModel() // push the loaded model into tmux/planner/groomer/scrum
+        captureIntake.onCost = { [weak self] usd in self?.recordAISpend(usd) }
+        captureIntake.boardSnapshot = { [weak self] in self?.captureBoardSnapshot() ?? "" }
+        applyClaudeModel() // push the loaded model into tmux/planner/groomer/scrum/capture
         TerminalViewCache.shared.applyFontSize(CGFloat(terminalFontSize))
         // System-wide ⌥⌘B → app forward + Mission Control.
         NotificationCenter.default.addObserver(forName: .bwSummon, object: nil, queue: .main) { [weak self] _ in
@@ -907,6 +910,34 @@ final class AppState: ObservableObject {
             }
     }
 
+    // MARK: AI Scrum Master intake (⌘⇧N) — capture, triage, auto-file
+
+    @Published var showScrumCapture = false
+
+    /// The CURRENT BOARD snapshot fed to the triage engine: every epic as
+    /// `id · title · [category] · status` plus a one-line summary, so the
+    /// model can place a captured thought without re-reading the whole board.
+    func captureBoardSnapshot() -> String {
+        guard !backlog.epics.isEmpty else { return "" }
+        var out = ""
+        for group in backlog.epics where !group.epic.isDone {
+            let e = group.epic
+            let cat = e.category.isEmpty ? "uncategorized" : e.category
+            out += "\(e.itemID) · \(e.title) · [\(cat)] · \(e.status)"
+            let open = group.stories.filter { !$0.isDone }
+            if !open.isEmpty {
+                let summary = open.prefix(4).map(\.title).joined(separator: "; ")
+                out += " — \(open.count) open: \(TranscriptReader.condense(summary, limit: 160))"
+            }
+            out += "\n"
+        }
+        return out
+    }
+
+    func runScrumCapture(_ text: String) {
+        captureIntake.capture(text)
+    }
+
     // MARK: Quick capture → triage inbox
 
     @Published var showCapture = false
@@ -1719,6 +1750,7 @@ final class AppState: ObservableObject {
         planner.model = claudeModel
         groomer.model = claudeModel
         scrumMaster.model = claudeModel
+        captureIntake.model = claudeModel
         persist()
     }
 

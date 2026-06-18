@@ -43,6 +43,9 @@ struct MainWindowView: View {
         .sheet(isPresented: $app.showCapture) {
             CaptureSheet()
         }
+        .sheet(isPresented: $app.showScrumCapture) {
+            ScrumCaptureSheet(intake: app.captureIntake)
+        }
         .sheet(isPresented: $app.showGroomSheet) {
             BacklogGroomView(groomer: app.groomer)
         }

@@ -54,7 +54,6 @@ struct BuildwrightApp: App {
                 Button("New Claude Pane (split right)") { app.addPane(kind: .claude, axis: .horizontal) }
                     .keyboardShortcut("n", modifiers: .command)
                 Button("New Claude Pane (split down)") { app.addPane(kind: .claude, axis: .vertical) }
-                    .keyboardShortcut("n", modifiers: [.command, .shift])
                 Button("New Claude Pane (isolated worktree)") { app.addPane(kind: .claude, worktree: true) }
                     .keyboardShortcut("n", modifiers: [.command, .control])
                 Button("Tee Up Next…") { app.showTeeUpSheet = true }
@@ -102,6 +101,8 @@ struct BuildwrightApp: App {
                 Button("Groom Backlog (AI)…") { app.showGroomSheet = true }
                 Divider()
                 Button("Copy Diagnostics Snapshot") { app.copyDiagnostics() }
+                Button("Capture to Backlog (AI triage)…") { app.showScrumCapture = true }
+                    .keyboardShortcut("n", modifiers: [.command, .shift])
                 Button("Capture a Thought…") { app.showCapture = true }
                     .keyboardShortcut("i", modifiers: [.command, .option])
             }
