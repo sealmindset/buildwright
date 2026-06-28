@@ -22,12 +22,14 @@ enum Config {
         return home.appendingPathComponent(".local/state/buildwright/status", isDirectory: true)
     }
 
-    /// Root of the /backlog skill's board.
+    /// Root of Buildwright's OWN /backlog board. The docai backlog (~/.claude/backlog) is a
+    /// SEPARATE project board and must not be read here — Buildwright tracks its own work under
+    /// the repo's backlog/ dir. Override with BUILDWRIGHT_BACKLOG_DIR for a non-default checkout.
     static var backlogDirectory: URL {
         if let override = ProcessInfo.processInfo.environment["BUILDWRIGHT_BACKLOG_DIR"] {
             return URL(fileURLWithPath: override, isDirectory: true)
         }
-        return home.appendingPathComponent(".claude/backlog", isDirectory: true)
+        return home.appendingPathComponent("Documents/GitHub/buildwright/backlog", isDirectory: true)
     }
 
     /// Claude Code user settings (for hook installation).
